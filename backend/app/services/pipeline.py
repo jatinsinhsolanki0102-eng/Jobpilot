@@ -35,13 +35,6 @@ FRESH_DAYS = 7
 SCAN_LIMIT = 40
 SCAN_PAGES = 2
 
-# Sent to Telegram when a scan found nothing new to push.
-NO_JOBS_MESSAGE = (
-    "Hello! I scanned Internshala for new internships and jobs but found "
-    "nothing new matching your profile right now. Please check back in the "
-    "next time slot. 🔍"
-)
-
 
 def _posted_dt(job: dict) -> datetime | None:
     """Normalize a job's posted_at (falling back to created_at) to aware datetime."""
@@ -124,23 +117,6 @@ def _passes_filters(
             if job_mode and job_mode != "onsite" and job_mode not in allowed:
                 return False, "work_mode"
     return True, None
-
-
-def _already_notified(
-    db: Session, user_id: int, job_id: int, channel: str = "telegram"
-) -> bool:
-    """True if this job was EVER pushed to the user. Ensures each internship/
-    job is only sent once (no repeats across scans)."""
-    return (
-        db.scalar(
-            select(NotificationLog.id).where(
-                NotificationLog.user_id == user_id,
-                NotificationLog.job_id == job_id,
-                NotificationLog.channel == channel,
-            )
-        )
-        is not None
-    )
 
 
 def _log_sent(
@@ -254,10 +230,8 @@ def run_user_scan(user_id: int) -> dict:
         upsert_raw_jobs(db, raw)
         source_ids = {r.source_id for r in raw}
         if not source_ids:
-            if bot.available and link.chat_id:
-                bot.send_message(link.chat_id, NO_JOBS_MESSAGE)
             # Reset the cadence so a transient scrape failure doesn't cause a
-            # re-scan (and re-notify) on the very next scheduler tick.
+            # re-scan on the very next scheduler tick.
             ns.last_scan_at = datetime.now(timezone.utc)
             db.commit()
             return {
@@ -276,10 +250,8 @@ def run_user_scan(user_id: int) -> dict:
         fresh = [d for d in job_dicts if is_fresh(d, FRESH_DAYS)]
 
         if not fresh:
-            if bot.available and link.chat_id:
-                bot.send_message(link.chat_id, NO_JOBS_MESSAGE)
-            # Reset the cadence so an empty fresh pool doesn't re-scan (and
-            # re-notify) on the very next scheduler tick.
+            # Reset the cadence so an empty fresh pool doesn't re-scan on the
+            # very next scheduler tick.
             ns.last_scan_at = datetime.now(timezone.utc)
             db.commit()
             return {
@@ -312,7 +284,6 @@ def run_user_scan(user_id: int) -> dict:
         best_score = 0.0
         best_title = best_company = ""
         score_sum = 0.0
-        sent_ids: set[int] = set()
 
         for j in ranked:
             match = j["match"]
@@ -322,9 +293,6 @@ def run_user_scan(user_id: int) -> dict:
                 best_score = match["score"]
                 best_title = j["title"]
                 best_company = j["company_name"]
-            if _already_notified(db, user.id, j["id"]):
-                ignored += 1
-                continue
             ok, reason = _passes_filters(j, match, ns, pref)
             if not ok:
                 ignored += 1
@@ -348,11 +316,6 @@ def run_user_scan(user_id: int) -> dict:
                 )
                 _log_sent(db, user.id, j["id"])
                 sent += 1
-                sent_ids.add(j["id"])
-
-        # No NEW unique internship/job was found this scan: let the user know.
-        if sent == 0 and bot.available and link.chat_id:
-            bot.send_message(link.chat_id, NO_JOBS_MESSAGE)
 
         link.last_message_at = datetime.now(timezone.utc)
         ns.last_scan_at = datetime.now(timezone.utc)
