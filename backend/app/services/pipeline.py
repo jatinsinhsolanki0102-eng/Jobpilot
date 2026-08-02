@@ -255,6 +255,10 @@ def run_user_scan(user_id: int) -> dict:
         if not source_ids:
             if bot.available and link.chat_id:
                 bot.send_message(link.chat_id, NO_JOBS_MESSAGE)
+            # Reset the cadence so a transient scrape failure doesn't cause a
+            # re-scan (and re-notify) on the very next scheduler tick.
+            ns.last_scan_at = datetime.now(timezone.utc)
+            db.commit()
             return {
                 "user_id": user_id,
                 "scanned": 0,
@@ -273,6 +277,10 @@ def run_user_scan(user_id: int) -> dict:
         if not fresh:
             if bot.available and link.chat_id:
                 bot.send_message(link.chat_id, NO_JOBS_MESSAGE)
+            # Reset the cadence so an empty fresh pool doesn't re-scan (and
+            # re-notify) on the very next scheduler tick.
+            ns.last_scan_at = datetime.now(timezone.utc)
+            db.commit()
             return {
                 "user_id": user_id,
                 "scanned": len(job_dicts),
