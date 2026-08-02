@@ -1,6 +1,63 @@
 ================================================================
  JOBPILOT AI - DEPLOYMENT NOTES
- Status: research in progress (user is choosing a platform)
+ Status: RAILWAY SELECTED - prep done, ready to deploy
+===============================================================
+
+ 8. RAILWAY DEPLOYMENT GUIDE (current target)
+ ----------------------------------------------------------------
+ What is already prepared in this repo (committed):
+   - backend/Dockerfile    : Python 3.12 + Playwright Chromium (--with-deps),
+                             TZ=Asia/Kolkata, listens on $PORT, runs app.seed
+                             (idempotent) before uvicorn.
+   - frontend/Dockerfile   : Node 22 + Next.js build, listens on $PORT.
+   - backend/.dockerignore : keeps .env, .venv, logs, db out of the image.
+   - frontend/.dockerignore: keeps node_modules/.next out of the image.
+   - backend/railway.toml  : DOCKERFILE build + start/healthcheck config.
+   - frontend/railway.toml : same for the Next.js app.
+   - scheduler timezone    : Asia/Kolkata (daily summary hour=20 => 8 PM IST).
+   - requirements.txt      : added tzdata so zoneinfo(Asia/Kolkata) works.
+
+ Step-by-step on Railway (dashboard, no CLI needed):
+   1. Push repo to GitHub (already done: github.com/jatinsinhsolanki0102-eng/Jobpilot).
+   2. Railway dashboard -> New Project -> Deploy from GitHub repo -> Jobpilot.
+   3. Provision PostgreSQL: click + New -> Database -> PostgreSQL (managed).
+      - Railway auto-injects a DATABASE_URL variable into services.
+   4. Backend service (the one with the Dockerfile in /backend):
+      - Ensure Service Root = backend  (Settings -> General -> Root Directory).
+      - Add env vars (Variables tab):
+          GROQ_API_KEY          = <from backend/.env>
+          TELEGRAM_BOT_TOKEN    = <from backend/.env>
+          TELEGRAM_BOT_USERNAME = JobPilot_Update_AI_Bot
+          SECRET_KEY            = <long random string>
+          SCHEDULER_ENABLED     = true
+          CORS_ORIGINS          = ["https://<frontend-domain>"]
+        (DATABASE_URL comes automatically from the Postgres plugin)
+      - Deploy. Check logs for "Telegram bot polling started" and
+        "Background scheduler started". Open the public URL -> /health
+        should return {"status":"ok",...}.
+   5. Frontend service (Next.js, Dockerfile in /frontend):
+      - Service Root = frontend.
+      - Add build/runtime variable: NEXT_PUBLIC_API_URL = https://<backend-domain>
+        (copy the backend public URL from the backend service settings)
+      - Redeploy once the variable is set (NEXT_PUBLIC_* is baked at build).
+   6. Verify the bot end-to-end:
+      - Open Telegram, message the bot /start and /link or sign in.
+      - Watch backend logs for a scheduled scan every 30 min.
+   7. Optional: assign a custom domain on each service
+      (Settings -> Networking -> Generate Domain / Custom Domain) and
+      update CORS_ORIGINS + NEXT_PUBLIC_API_URL accordingly.
+
+ Environment variables summary (never commit secrets):
+   Backend:  DATABASE_URL, GROQ_API_KEY, TELEGRAM_BOT_TOKEN,
+             TELEGRAM_BOT_USERNAME, SECRET_KEY, SCHEDULER_ENABLED, CORS_ORIGINS
+   Frontend: NEXT_PUBLIC_API_URL
+
+ Notes:
+   - Do NOT put backend/.env on the platform; paste values as env vars.
+   - Redis is NOT required (REDIS_URL is unused at runtime).
+   - First deploy may take a few minutes (Chromium install).
+   - Railway bills only active projects; delete the project to stop costs.
+
 ================================================================
 
 1. THE KEY CONSTRAINT (IMPORTANT)

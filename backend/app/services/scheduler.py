@@ -25,7 +25,7 @@ def start_scheduler() -> BackgroundScheduler | None:
         logger.info("Scheduler disabled (SCHEDULER_ENABLED=false)")
         return None
 
-    sched = BackgroundScheduler(timezone="UTC")
+    sched = BackgroundScheduler(timezone="Asia/Kolkata")
     # Check every minute so each user's configured interval (e.g. 30 min) fires
     # on time (at most ~1 min late) instead of drifting minutes. The due check
     # is a cheap SELECT; coalescing + max_instances prevents overlapping scans.
