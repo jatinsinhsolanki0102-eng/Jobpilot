@@ -1,0 +1,332 @@
+================================================================
+ JOBPILOT AI - SYSTEM OVERVIEW
+ Autonomous AI Career Agent
+================================================================
+
+1. WHAT IT DOES
+----------------------------------------------------------------
+JobPilot AI is a full-stack web application that helps you find the
+right jobs. It:
+
+  - Uploads and parses your resume (PDF or TXT) into structured data
+    (skills, projects, experience, education, certifications).
+  - Lets you set career preferences (job type, work modes, locations,
+    salary, domains).
+  - Fetches REAL job listings from Internshala (web scraping) and also
+    comes with 15 sample jobs.
+  - Scores every job against your resume + preferences and ranks them
+    from best to worst match.
+  - Shows AI-powered match assessments and generated cover letters
+    (powered by Groq, an LLM API).
+  - Tracks your applications (applied / interview / offer / rejected).
+  - Runs an AUTONOMOUS TELEGRAM AGENT on a schedule: it scans
+    Internshala on its own, AI-matches the new jobs to your profile,
+    and pushes the best ones to your Telegram with a rich alert
+    (company, role, stipend, match %, matched/missing skills, apply link).
+  - Sends daily summaries and weekly reports, and answers commands
+    inside Telegram (/jobs, /top, /search, /saved, /status, /help).
+  - Tracks scan/analytics history (scanned, matched, sent, ignored,
+    average score) and shows a funnel of your applications.
+
+
+2. ARCHITECTURE (TWO PARTS)
+----------------------------------------------------------------
+  +----------------------+        REST API          +----------------------+
+  |   FRONTEND (Next.js) | <----------------------> |  BACKEND (FastAPI)   |
+  |  http://localhost:3000|   JSON over HTTP        | http://127.0.0.1:8000|
+  +----------------------+                         +----------------------+
+        React / TypeScript                            Python / SQLAlchemy
+        Tailwind (dark theme)                         Pydantic v2 / JWT auth
+                                                             |
+                                                     +----------------------+
+                                                     |  DATABASE (PostgreSQL)|
+                                                     |  database: jobpilot   |
+                                                     +----------------------+
+                                                             |
+                                                     +----------------------+
+                                                     |  INTERNSHALA (web)   |
+                                                     |  scraped via Playwright|
+                                                     +----------------------+
+
+  - Frontend: Next.js 16 (App Router). All pages under app/.
+  - Backend: FastAPI. All logic under backend/app/.
+  - Database: PostgreSQL 16 (local). Backend connects via SQLAlchemy.
+  - AI: Groq API (LLM) for match assessments + cover letters.
+    If no API key is set, a heuristic (rule-based) fallback is used.
+
+  Folder layout (root):
+    backend/            FastAPI backend
+    frontend/           Next.js frontend
+    docker-compose.yml  (optional) container setup for backend + DB
+
+
+3. HOW A REQUEST FLOWS (END TO END)
+----------------------------------------------------------------
+ Example: "I want to find jobs matching my resume."
+
+ Step 1 - LOGIN / REGISTER
+   User registers or logs in at /login.
+   Backend (backend/app/api/auth.py) checks credentials, hashes
+   passwords with bcrypt, and issues a JWT access token.
+
+ Step 2 - UPLOAD RESUME
+   User uploads resume at /resume.
+   Backend saves the file to backend/storage/uploads and parses it:
+     - PDF  -> text extracted with PyMuPDF
+     - TXT  -> read directly
+   The parser (backend/app/services/resume_parser.py) extracts skills,
+   projects, experience, education, certifications. If Groq is
+   configured it uses the LLM; otherwise heuristic parsing is used.
+
+ Step 3 - SET PREFERENCES
+   User sets preferences at /preferences (job type, work mode, salary,
+   locations, domains). Stored per-user in the database.
+
+ Step 4 - SYNC REAL JOBS FROM INTERNSHALA
+   On the /jobs page the user types a keyword (e.g. "python") and
+   clicks "Sync Internshala".
+   Backend (backend/app/services/job_sources/) launches headless
+   Chromium via Playwright:
+     - Opens https://internshala.com/internships/... (keyword URL)
+     - Reads the listing cards (title, company, location, stipend,
+       skills, posted date, link)
+     - Opens each detail page to grab the full job description
+     - Converts stipend text (e.g. "Rs 13,000 - 18,000 /month") into
+       numeric salary fields
+     - Saves jobs into the DB (deduped by source_id, so running the
+       sync again updates instead of duplicating)
+   Endpoint: POST /api/v1/jobs/sync
+
+ Step 5 - RANK THE JOBS (the recommendation engine)
+   Endpoint: GET /api/v1/jobs
+   Backend (backend/app/services/matching.py) scores every job:
+     - Skill match  (60%): overlap between resume skills and the job's
+       required skills.
+     - Semantic match (40%): text similarity between your resume and the
+       job description (custom TF-IDF + cosine similarity, no ML lib).
+     - Preference fit: how well the job satisfies job type, work mode,
+       location, salary, domains.
+     - Freshness: recently posted jobs score higher.
+   Final rank_score = 0.6*(match) + 0.3*(preference fit) + 0.1*(freshness)
+   Jobs are returned sorted best-first with a breakdown showing
+   matched skills and missing skills.
+
+ Step 6 - VIEW JOB DETAILS + AI HELP
+   Clicking a job (/jobs/{id}) shows the full match breakdown.
+   With Groq configured, the user can request:
+     - AI match assessment (score + strengths + gaps + summary)
+     - AI-generated cover letter
+   These calls go through backend/app/services/ai.py to the Groq LLM.
+
+ Step 7 - APPLY + TRACK
+   User clicks Apply. An application record is created and tracked on
+   the /applications page. Status can be updated (interview, offer,
+   rejected, etc.). Dashboard (/dashboard) shows stats and top matches.
+
+
+4. DATABASE MODEL (MAIN TABLES)
+----------------------------------------------------------------
+  users          - accounts, hashed passwords
+  resumes        - uploaded file + parsed structured data (JSON)
+  preferences    - user job preferences
+  companies      - company records (linked to jobs)
+  jobs           - job listings (source, source_id, title, company,
+                   location, salary, skills, description, url, ...)
+  applications   - user <-> job applications with status
+  notifications  - alerts (used by dashboard + telegram agent)
+  saved_jobs     - bookmarking
+  notification_settings - per-user telegram/scan settings
+  telegram_links       - linked telegram chat per user
+  telegram_link_codes  - one-time /link pairing codes
+  notification_logs    - every telegram alert sent (for analytics)
+  scan_reports         - daily / weekly aggregation of scans
+
+  Key fields on jobs:
+    source_id   - unique id used to deduplicate scraped listings
+    source      - where the job came from: "internshala" or "JobPilot"
+    skills_required - list of skills (JSON)
+    salary_min/max  - numeric INR amounts (normalized to per-month)
+
+
+5. API ENDPOINTS (all under /api/v1)
+----------------------------------------------------------------
+  Auth:
+    POST  /auth/register      create account
+    POST  /auth/login         get token
+    GET   /auth/me            current user
+
+  Resumes:
+    POST  /resumes/upload     upload + parse resume
+    GET   /resumes/           list user resumes
+
+  Preferences:
+    GET/PUT /preferences      read / update preferences
+
+  Jobs:
+    GET   /jobs               ranked job list (?source= filter)
+    POST  /jobs/sync          scrape Internshala + save jobs
+    GET   /jobs/sources       list sources with job counts
+    GET   /jobs/{id}          job detail + match breakdown (?with_ai=true)
+    POST  /jobs/{id}/cover-letter   generate cover letter (Groq)
+
+  Applications:
+    GET/POST /applications    list / create applications
+    PATCH /applications/{id}  update status
+
+  Saved jobs:
+    GET   /saved              list saved jobs
+    POST  /saved/{job_id}     save a job
+    DELETE /saved/{job_id}    unsave a job
+
+  Telegram agent:
+    GET   /telegram/status    link state + scan settings
+    POST  /telegram/link      generate a one-time pairing code
+    PUT   /telegram/settings  update scan/notification settings
+    POST  /telegram/sync-now  run a scan immediately
+
+  Analytics:
+    GET   /analytics/overview daily scan series + totals (?days=)
+    GET   /analytics/reports  daily + weekly scan reports
+    GET   /analytics/skills   top in-demand skills
+    GET   /analytics/funnel   application counts by status
+
+  Notifications:
+    GET   /notifications      list alerts (?limit=)
+    POST  /notifications/{id}/read   mark as read
+
+  Dashboard:
+    GET   /dashboard/stats    counts + top matches
+
+  Full API docs (auto-generated): http://127.0.0.1:8000/docs
+
+
+6. AI COMPONENTS (Groq)
+----------------------------------------------------------------
+  backend/app/services/ai.py wraps the Groq LLM API.
+  Used for:
+    - Resume parsing (structured extraction)
+    - Job match assessment (score + strengths + gaps)
+    - Cover letter generation
+  The model is configured in backend/.env:
+      GROQ_API_KEY=...        (your private key - never share/commit)
+      GROQ_MODEL=llama-3.3-70b-versatile
+  If GROQ_API_KEY is empty, the system automatically falls back to
+  deterministic heuristics so the app still works without AI.
+
+
+7. HOW TO RUN
+----------------------------------------------------------------
+  Requirements: Python 3.12+, Node.js 20+, PostgreSQL running locally,
+  and Playwright Chromium installed (see note below).
+
+  Terminal 1 - Backend:
+    cd backend
+    .venv\Scripts\python -m uvicorn app.main:app --port 8000 --reload
+
+    First time on a fresh database (creates tables + 15 sample jobs):
+    .venv\Scripts\python -m app.seed
+
+  Terminal 2 - Frontend:
+    cd frontend
+    npm run dev
+
+  Then open http://localhost:3000 in your browser.
+
+  Note - Playwright browser (needed for Internshala scraping):
+    cd backend
+    .venv\Scripts\python -m playwright install chromium
+
+  Configuration lives in backend/.env (create from .env.example).
+  The most important setting is DATABASE_URL:
+    postgresql+psycopg2://postgres:<password>@localhost:5432/jobpilot
+  For the Telegram agent add:
+    TELEGRAM_BOT_TOKEN=<token from @BotFather>   (required for the bot)
+    TELEGRAM_BOT_USERNAME=<your bot username>    (optional)
+    SCHEDULER_ENABLED=true   (default; starts the background jobs)
+
+
+8. INTERNSHALA SYNC - DETAILS
+----------------------------------------------------------------
+  Files: backend/app/services/job_sources/
+    base.py        - RawJob data model + JobSource interface
+    internshala.py - the Playwright scraper + parsers
+    sync.py        - saves scraped listings into the DB
+
+  Flow:
+    1. Build the listing URL from the keyword, e.g.
+       https://internshala.com/internships/keywords-python-jobs
+    2. Load the page with headless Chromium and wait for cards.
+    3. Extract each card: title, company, locations, stipend, skills,
+       posted date, detail URL.
+    4. Open the detail page (up to a cap) for the full description.
+    5. Parse stipend like "Rs 13,000 - 18,000 /month" into
+       salary_min / salary_max (converted to monthly INR).
+    6. Upsert into the jobs table by source_id (no duplicates).
+    7. The new jobs immediately become part of ranking/matching.
+
+  Caveat: scraping depends on Internshala's HTML. If Internshala
+  changes its layout, the selectors in internshala.py need updating.
+
+
+9. TELEGRAM AGENT - DETAILS
+----------------------------------------------------------------
+  Files:
+    backend/app/services/telegram.py   - TelegramBot: polling thread,
+                                         message formatting, commands
+    backend/app/services/pipeline.py   - run_user_scan(): scrape ->
+                                         match -> filter -> notify -> log
+    backend/app/services/reports.py    - daily/weekly aggregators
+    backend/app/services/scheduler.py  - APScheduler background jobs
+    backend/app/api/telegram.py        - /telegram/* endpoints
+
+  Scan pipeline (run_user_scan):
+    1. Derive search keywords from user settings (or resume/preferences).
+    2. Scrape Internshala (up to the configured cap) with details.
+    3. Upsert jobs by source_id.
+    4. Rank each job with the AI matching engine.
+    5. Filter out: already-notified jobs, duplicates, low match score,
+       wrong location/work mode, expired listings, stipend below the
+       user's minimum.
+    6. Send a rich Telegram alert per accepted job (limited to
+       max_per_scan), create a Notification + NotificationLog row.
+    7. Record a daily ScanReport (scanned / matched / sent / ignored /
+       avg score / best match).
+
+  Background scheduler (APScheduler):
+    - Sync pass  : runs periodically (default every 15 min); it picks
+      up every linked user whose scan is due based on their chosen
+      interval (15 min / 30 min / 1 hr / 6 hrs / daily) and runs the
+      scan pipeline for them.
+    - Daily summary : 20:00 - recap of the day's scan per user.
+    - Weekly report : Sunday 20:00 - full week stats + top skills.
+    Each user can toggle daily/weekly reports in their settings.
+
+  Telegram commands (sent to the bot):
+    /start    welcome + quick instructions
+    /link <code>   pair this chat to your account
+    /profile  show resume + preference summary
+    /jobs     latest 5 matched jobs
+    /top      top 3 ranked right now
+    /search <kw>   5 best matches for a keyword
+    /saved    your saved jobs
+    /status   bot status + settings
+    /help     list commands
+
+  Linking flow:
+    Web app -> "Generate link code" -> POST /telegram/link returns a
+    6-char code (expires in 15 min) -> user sends /link <code> to the
+    bot -> bot validates the code and binds the chat_id to the account.
+
+  Requirements: TELEGRAM_BOT_TOKEN must be set in backend/.env and the
+  backend restarted. Without it the bot reports "not configured" and
+  every scan silently skips sending (so the rest of the app still
+  works). The bot username is optional via TELEGRAM_BOT_USERNAME.
+
+
+10. SECURITY NOTES
+----------------------------------------------------------------
+  - Passwords are hashed with bcrypt (never stored in plain text).
+  - Auth uses JWT bearer tokens (expire after 7 days).
+  - The Groq API key is stored only in backend/.env, which is
+    gitignored - it must never be committed to version control.
+  - CORS restricts the API to the frontend origins (localhost:3000).

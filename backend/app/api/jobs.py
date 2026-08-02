@@ -1,0 +1,161 @@
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from ..database import get_db
+from ..models import Application, Job, Preference, Resume, User
+from ..schemas import JobDetail, MatchBreakdown, RankedJob
+from ..services.ai import generate_cover_letter
+from ..services.job_sources import sync_internshala
+from ..services.matching import ai_match_score, match_scores, rank_jobs
+from ..services.serializers import job_to_dict, pref_to_dict
+from .deps import get_current_user
+
+router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+
+@router.get("", response_model=list[RankedJob])
+def list_jobs(
+    limit: int = Query(default=50, ge=1, le=100),
+    source: str | None = Query(default=None),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[RankedJob]:
+    query = select(Job)
+    if source:
+        query = query.where(Job.source == source)
+    jobs = list(db.scalars(query.order_by(Job.created_at.desc()).limit(200)))
+
+    resume = db.scalar(
+        select(Resume)
+        .where(Resume.user_id == user.id)
+        .order_by(Resume.created_at.desc())
+        .limit(1)
+    )
+    pref = db.query(Preference).filter(Preference.user_id == user.id).first()
+
+    if resume is None or not resume.raw_text:
+        ranked = [job_to_dict(j) for j in jobs]
+        ranked.sort(key=lambda x: x["created_at"] or datetime.min, reverse=True)
+        return [RankedJob(**j) for j in ranked[:limit]]
+
+    ranked = rank_jobs(
+        resume_text=resume.raw_text,
+        resume_skills=resume.skills,
+        pref=pref_to_dict(pref),
+        jobs=[job_to_dict(j) for j in jobs],
+    )
+    return [RankedJob(**j) for j in ranked[:limit]]
+
+
+class SyncRequest(BaseModel):
+    query: str | None = Field(default=None, max_length=120)
+    location: str | None = Field(default=None, max_length=80)
+    internship: bool = True
+    limit: int = Field(default=20, ge=1, le=50)
+    with_details: bool = True
+
+
+@router.post("/sync")
+def sync_jobs(
+    payload: SyncRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Scrape Internshala listings and upsert them into the local job store."""
+    result = sync_internshala(
+        db=db,
+        query=payload.query or None,
+        location=payload.location or None,
+        internship=payload.internship,
+        limit=payload.limit,
+        with_details=payload.with_details,
+    )
+    return result
+
+
+@router.get("/sources")
+def list_sources(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    rows = db.execute(select(Job.source, func.count(Job.id)).group_by(Job.source)).all()
+    return [{"source": source, "count": count} for source, count in rows]
+
+
+@router.get("/{job_id}", response_model=JobDetail)
+def get_job(
+    job_id: int,
+    with_ai: bool = Query(default=False),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> JobDetail:
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    detail = JobDetail(**job_to_dict(job))
+    has_applied = (
+        db.scalar(
+            select(Application.id).where(
+                Application.user_id == user.id, Application.job_id == job_id
+            )
+        )
+        is not None
+    )
+    detail.has_applied = has_applied
+
+    resume = db.scalar(
+        select(Resume)
+        .where(Resume.user_id == user.id)
+        .order_by(Resume.created_at.desc())
+        .limit(1)
+    )
+    if resume is not None and resume.raw_text:
+        scores = match_scores(resume.raw_text, resume.skills, [job_to_dict(job)])
+        detail.match = MatchBreakdown(**scores[job_id])
+        if with_ai:
+            detail.ai_assessment = ai_match_score(
+                resume.raw_text, resume.skills, job_to_dict(job)
+            )
+    return detail
+
+
+@router.post("/{job_id}/cover-letter")
+def cover_letter(
+    job_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    resume = db.scalar(
+        select(Resume)
+        .where(Resume.user_id == user.id)
+        .order_by(Resume.created_at.desc())
+        .limit(1)
+    )
+    if resume is None:
+        raise HTTPException(status_code=400, detail="Upload a resume first")
+
+    letter = generate_cover_letter(
+        candidate={
+            "skills": resume.skills or [],
+            "projects": resume.projects or [],
+            "experience": resume.experience or [],
+            "education": resume.education or [],
+            "full_name": (resume.structured or {}).get("full_name") or user.full_name,
+        },
+        job=job_to_dict(job),
+        company=job.company_name,
+    )
+    if letter is None:
+        raise HTTPException(
+            status_code=503,
+            detail="AI is not configured. Set GROQ_API_KEY to generate cover letters.",
+        )
+    return {"cover_letter": letter}
