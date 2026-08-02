@@ -26,12 +26,12 @@ def start_scheduler() -> BackgroundScheduler | None:
         return None
 
     sched = BackgroundScheduler(timezone="UTC")
-    # Check frequently (every 5 min) so each user's configured interval
-    # (e.g. 30 min) is respected without long gaps. Coalescing + max_instances
-    # prevents overlapping scans.
+    # Check every minute so each user's configured interval (e.g. 30 min) fires
+    # on time (at most ~1 min late) instead of drifting minutes. The due check
+    # is a cheap SELECT; coalescing + max_instances prevents overlapping scans.
     sched.add_job(
         sync_pass_all,
-        IntervalTrigger(minutes=5),
+        IntervalTrigger(minutes=1),
         id="sync_pass",
         max_instances=1,
         coalesce=True,
