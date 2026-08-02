@@ -29,7 +29,8 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 # Only push internships/jobs posted within this many days (latest opportunities).
-FRESH_DAYS = 2
+# User preference: include postings from the last 1 week.
+FRESH_DAYS = 7
 # How many listings to scrape per scan (2 pages) so enough fresh jobs exist.
 SCAN_LIMIT = 40
 SCAN_PAGES = 2
