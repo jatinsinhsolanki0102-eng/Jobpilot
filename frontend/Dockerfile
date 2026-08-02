@@ -17,4 +17,4 @@ RUN npm run build
 EXPOSE 3000
 
 # PORT is set by Railway; falls back to 3000 for docker-compose.
-CMD ["sh", "-c", "next start -p ${PORT:-3000}"]
+CMD ["sh", "/app/start.sh"]

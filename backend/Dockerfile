@@ -15,5 +15,5 @@ COPY . .
 EXPOSE 8000
 
 # PORT is set by Railway (default 3000); falls back to 8000 for docker-compose.
-# seed is idempotent and only fills sample jobs for the dashboard.
-CMD ["sh", "-c", "python -m app.seed && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# start.sh runs the idempotent seed then starts uvicorn.
+CMD ["sh", "/app/start.sh"]
