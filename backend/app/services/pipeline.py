@@ -30,9 +30,12 @@ settings = get_settings()
 
 # Only push internships/jobs posted within this many days (latest opportunities).
 FRESH_DAYS = 2
-# Re-send a still-fresh job only after this many hours (avoids spam while
-# keeping the scan useful when listings rotate slowly).
-REDEDUP_HOURS = 24
+# When fewer than MIN_ALERTS jobs are fresh, broaden up to this window so the
+# batch can still be filled with the latest available opportunities.
+FRESH_FALLBACK_DAYS = 7
+# Re-send a job again after this many hours. Set to 0 to always re-send the top
+# matches on every scan (guarantees messages arrive automatically).
+REDEDUP_HOURS = 0
 # Target minimum number of alerts per scan.
 MIN_ALERTS = 5
 # How many listings to scrape per scan (2 pages) so enough fresh jobs exist.
@@ -126,7 +129,13 @@ def _passes_filters(
 def _already_notified(
     db: Session, user_id: int, job_id: int, channel: str = "telegram"
 ) -> bool:
-    """True if the job was pushed to this user recently (within REDEDUP_HOURS)."""
+    """True if the job was pushed to this user recently (within REDEDUP_HOURS).
+
+    REDEDUP_HOURS = 0 disables dedup so the top matches are re-sent on every
+    scan, guaranteeing the bot keeps delivering alerts automatically.
+    """
+    if REDEDUP_HOURS <= 0:
+        return False
     cutoff = datetime.now(timezone.utc) - timedelta(hours=REDEDUP_HOURS)
     return (
         db.scalar(
@@ -138,6 +147,31 @@ def _already_notified(
             )
         )
         is not None
+    )
+
+
+def _log_sent(
+    db: Session, user_id: int, job_id: int, channel: str = "telegram"
+) -> None:
+    """Record (or refresh) that a job was pushed. Re-sends update the timestamp
+    instead of violating the (user_id, job_id, channel) unique key."""
+    existing = db.scalar(
+        select(NotificationLog).where(
+            NotificationLog.user_id == user_id,
+            NotificationLog.job_id == job_id,
+            NotificationLog.channel == channel,
+        )
+    )
+    if existing is not None:
+        existing.sent_at = datetime.now(timezone.utc)
+        return
+    db.add(
+        NotificationLog(
+            user_id=user_id,
+            job_id=job_id,
+            channel=channel,
+            sent_at=datetime.now(timezone.utc),
+        )
     )
 
 
@@ -239,8 +273,36 @@ def run_user_scan(user_id: int) -> dict:
             job_to_dict(j)
             for j in db.scalars(select(Job).where(Job.source_id.in_(source_ids)))
         ]
-        # Only the latest listings (posted within the last FRESH_DAYS days).
-        fresh = [d for d in job_dicts if is_fresh(d)]
+        # Prefer the latest listings (posted within FRESH_DAYS days).
+        fresh = [d for d in job_dicts if is_fresh(d, FRESH_DAYS)]
+        # If too few fresh ones exist, broaden slightly so every scan can still
+        # deliver a useful batch of MIN_ALERTS opportunities.
+        if len(fresh) < MIN_ALERTS:
+            seen = {d["id"] for d in fresh}
+            for d in job_dicts:
+                if len(fresh) >= MIN_ALERTS:
+                    break
+                if d["id"] in seen:
+                    continue
+                if FRESH_FALLBACK_DAYS > FRESH_DAYS and is_fresh(
+                    d, FRESH_FALLBACK_DAYS
+                ):
+                    fresh.append(d)
+        # Final fallback: whatever the scrape just pulled is the current listing,
+        # so top up with the newest remaining jobs to keep the batch full.
+        if len(fresh) < MIN_ALERTS:
+            seen = {d["id"] for d in fresh}
+            for d in sorted(
+                job_dicts,
+                key=lambda x: _posted_dt(x)
+                or datetime.min.replace(tzinfo=timezone.utc),
+                reverse=True,
+            ):
+                if len(fresh) >= MIN_ALERTS:
+                    break
+                if d["id"] in seen:
+                    continue
+                fresh.append(d)
         if not fresh:
             return {
                 "user_id": user_id,
@@ -307,14 +369,7 @@ def run_user_scan(user_id: int) -> dict:
                         body=f"{match['score']:.0f}% match · {j.get('location') or 'Remote'}",
                     )
                 )
-                db.add(
-                    NotificationLog(
-                        user_id=user.id,
-                        job_id=j["id"],
-                        channel="telegram",
-                        sent_at=datetime.now(timezone.utc),
-                    )
-                )
+                _log_sent(db, user.id, j["id"])
                 sent += 1
                 sent_ids.add(j["id"])
 
@@ -344,14 +399,7 @@ def run_user_scan(user_id: int) -> dict:
                             body=f"{match['score']:.0f}% match · {j.get('location') or 'Remote'}",
                         )
                     )
-                    db.add(
-                        NotificationLog(
-                            user_id=user.id,
-                            job_id=j["id"],
-                            channel="telegram",
-                            sent_at=datetime.now(timezone.utc),
-                        )
-                    )
+                    _log_sent(db, user.id, j["id"])
                     sent += 1
                     sent_ids.add(j["id"])
 
