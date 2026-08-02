@@ -30,17 +30,16 @@ settings = get_settings()
 
 # Only push internships/jobs posted within this many days (latest opportunities).
 FRESH_DAYS = 2
-# When fewer than MIN_ALERTS jobs are fresh, broaden up to this window so the
-# batch can still be filled with the latest available opportunities.
-FRESH_FALLBACK_DAYS = 7
-# Re-send a job again after this many hours. Set to 0 to always re-send the top
-# matches on every scan (guarantees messages arrive automatically).
-REDEDUP_HOURS = 0
-# Target minimum number of alerts per scan.
-MIN_ALERTS = 5
 # How many listings to scrape per scan (2 pages) so enough fresh jobs exist.
 SCAN_LIMIT = 40
 SCAN_PAGES = 2
+
+# Sent to Telegram when a scan found nothing new to push.
+NO_JOBS_MESSAGE = (
+    "Hello! I scanned Internshala for new internships and jobs but found "
+    "nothing new matching your profile right now. Please check back in the "
+    "next time slot. 🔍"
+)
 
 
 def _posted_dt(job: dict) -> datetime | None:
@@ -129,21 +128,14 @@ def _passes_filters(
 def _already_notified(
     db: Session, user_id: int, job_id: int, channel: str = "telegram"
 ) -> bool:
-    """True if the job was pushed to this user recently (within REDEDUP_HOURS).
-
-    REDEDUP_HOURS = 0 disables dedup so the top matches are re-sent on every
-    scan, guaranteeing the bot keeps delivering alerts automatically.
-    """
-    if REDEDUP_HOURS <= 0:
-        return False
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=REDEDUP_HOURS)
+    """True if this job was EVER pushed to the user. Ensures each internship/
+    job is only sent once (no repeats across scans)."""
     return (
         db.scalar(
             select(NotificationLog.id).where(
                 NotificationLog.user_id == user_id,
                 NotificationLog.job_id == job_id,
                 NotificationLog.channel == channel,
-                NotificationLog.sent_at >= cutoff,
             )
         )
         is not None
@@ -261,6 +253,8 @@ def run_user_scan(user_id: int) -> dict:
         upsert_raw_jobs(db, raw)
         source_ids = {r.source_id for r in raw}
         if not source_ids:
+            if bot.available and link.chat_id:
+                bot.send_message(link.chat_id, NO_JOBS_MESSAGE)
             return {
                 "user_id": user_id,
                 "scanned": 0,
@@ -273,37 +267,12 @@ def run_user_scan(user_id: int) -> dict:
             job_to_dict(j)
             for j in db.scalars(select(Job).where(Job.source_id.in_(source_ids)))
         ]
-        # Prefer the latest listings (posted within FRESH_DAYS days).
+        # Only the latest listings (posted within the last FRESH_DAYS days).
         fresh = [d for d in job_dicts if is_fresh(d, FRESH_DAYS)]
-        # If too few fresh ones exist, broaden slightly so every scan can still
-        # deliver a useful batch of MIN_ALERTS opportunities.
-        if len(fresh) < MIN_ALERTS:
-            seen = {d["id"] for d in fresh}
-            for d in job_dicts:
-                if len(fresh) >= MIN_ALERTS:
-                    break
-                if d["id"] in seen:
-                    continue
-                if FRESH_FALLBACK_DAYS > FRESH_DAYS and is_fresh(
-                    d, FRESH_FALLBACK_DAYS
-                ):
-                    fresh.append(d)
-        # Final fallback: whatever the scrape just pulled is the current listing,
-        # so top up with the newest remaining jobs to keep the batch full.
-        if len(fresh) < MIN_ALERTS:
-            seen = {d["id"] for d in fresh}
-            for d in sorted(
-                job_dicts,
-                key=lambda x: _posted_dt(x)
-                or datetime.min.replace(tzinfo=timezone.utc),
-                reverse=True,
-            ):
-                if len(fresh) >= MIN_ALERTS:
-                    break
-                if d["id"] in seen:
-                    continue
-                fresh.append(d)
+
         if not fresh:
+            if bot.available and link.chat_id:
+                bot.send_message(link.chat_id, NO_JOBS_MESSAGE)
             return {
                 "user_id": user_id,
                 "scanned": len(job_dicts),
@@ -335,7 +304,6 @@ def run_user_scan(user_id: int) -> dict:
         best_title = best_company = ""
         score_sum = 0.0
         sent_ids: set[int] = set()
-        max_per_scan = max(ns.max_per_scan, MIN_ALERTS)
 
         for j in ranked:
             match = j["match"]
@@ -352,7 +320,7 @@ def run_user_scan(user_id: int) -> dict:
             if not ok:
                 ignored += 1
                 continue
-            if sent >= max_per_scan:
+            if sent >= ns.max_per_scan:
                 ignored += 1
                 continue
 
@@ -373,35 +341,9 @@ def run_user_scan(user_id: int) -> dict:
                 sent += 1
                 sent_ids.add(j["id"])
 
-        # Guarantee a useful batch: if strict filters trimmed it below the
-        # minimum, top up with the next-best fresh listings (still latest,
-        # still not recently notified) up to MIN_ALERTS.
-        if sent < MIN_ALERTS:
-            for j in ranked:
-                if sent >= MIN_ALERTS or sent >= max_per_scan:
-                    break
-                if j["id"] in sent_ids:
-                    continue
-                if _already_notified(db, user.id, j["id"]):
-                    ignored += 1
-                    continue
-                match = j["match"]
-                msg = format_job_alert(j, match)
-                if not bot.available:
-                    break
-                if bot.send_message(link.chat_id, msg):
-                    db.add(
-                        Notification(
-                            user_id=user.id,
-                            job_id=j["id"],
-                            kind="new_match",
-                            title=f"{j['title']} @ {j['company_name']}",
-                            body=f"{match['score']:.0f}% match · {j.get('location') or 'Remote'}",
-                        )
-                    )
-                    _log_sent(db, user.id, j["id"])
-                    sent += 1
-                    sent_ids.add(j["id"])
+        # No NEW unique internship/job was found this scan: let the user know.
+        if sent == 0 and bot.available and link.chat_id:
+            bot.send_message(link.chat_id, NO_JOBS_MESSAGE)
 
         link.last_message_at = datetime.now(timezone.utc)
         ns.last_scan_at = datetime.now(timezone.utc)
