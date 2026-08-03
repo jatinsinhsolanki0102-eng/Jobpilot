@@ -1,4 +1,4 @@
 #!/bin/sh
 set -e
 
-exec next start -p "${PORT:-3000}"
+exec ./node_modules/.bin/next start -p "${PORT:-3000}"
