@@ -1,171 +1,112 @@
 ================================================================
  JOBPILOT AI - DEPLOYMENT NOTES
- Status: RAILWAY SELECTED - prep done, ready to deploy
-===============================================================
-
- 8. RAILWAY DEPLOYMENT GUIDE (current target)
- ----------------------------------------------------------------
- What is already prepared in this repo (committed):
-   - backend/Dockerfile    : Python 3.12 + Playwright Chromium (--with-deps),
-                             TZ=Asia/Kolkata, listens on $PORT, runs app.seed
-                             (idempotent) before uvicorn.
-   - frontend/Dockerfile   : Node 22 + Next.js build, listens on $PORT.
-   - backend/.dockerignore : keeps .env, .venv, logs, db out of the image.
-   - frontend/.dockerignore: keeps node_modules/.next out of the image.
-   - backend/railway.toml  : DOCKERFILE build + start/healthcheck config.
-   - frontend/railway.toml : same for the Next.js app.
-   - scheduler timezone    : Asia/Kolkata (daily summary hour=20 => 8 PM IST).
-   - requirements.txt      : added tzdata so zoneinfo(Asia/Kolkata) works.
-
- Step-by-step on Railway (dashboard, no CLI needed):
-   1. Push repo to GitHub (already done: github.com/jatinsinhsolanki0102-eng/Jobpilot).
-   2. Railway dashboard -> New Project -> Deploy from GitHub repo -> Jobpilot.
-   3. Provision PostgreSQL: click + New -> Database -> PostgreSQL (managed).
-      - Railway auto-injects a DATABASE_URL variable into services.
-   4. Backend service (the one with the Dockerfile in /backend):
-      - Ensure Service Root = backend  (Settings -> General -> Root Directory).
-      - Add env vars (Variables tab):
-          GROQ_API_KEY          = <from backend/.env>
-          TELEGRAM_BOT_TOKEN    = <from backend/.env>
-          TELEGRAM_BOT_USERNAME = JobPilot_Update_AI_Bot
-          SECRET_KEY            = <long random string>
-          SCHEDULER_ENABLED     = true
-          CORS_ORIGINS          = ["https://<frontend-domain>"]
-        (DATABASE_URL comes automatically from the Postgres plugin)
-      - Deploy. Check logs for "Telegram bot polling started" and
-        "Background scheduler started". Open the public URL -> /health
-        should return {"status":"ok",...}.
-   5. Frontend service (Next.js, Dockerfile in /frontend):
-      - Service Root = frontend.
-      - Add build/runtime variable: NEXT_PUBLIC_API_URL = https://<backend-domain>
-        (copy the backend public URL from the backend service settings)
-      - Redeploy once the variable is set (NEXT_PUBLIC_* is baked at build).
-   6. Verify the bot end-to-end:
-      - Open Telegram, message the bot /start and /link or sign in.
-      - Watch backend logs for a scheduled scan every 30 min.
-   7. Optional: assign a custom domain on each service
-      (Settings -> Networking -> Generate Domain / Custom Domain) and
-      update CORS_ORIGINS + NEXT_PUBLIC_API_URL accordingly.
-
- Environment variables summary (never commit secrets):
-   Backend:  DATABASE_URL, GROQ_API_KEY, TELEGRAM_BOT_TOKEN,
-             TELEGRAM_BOT_USERNAME, SECRET_KEY, SCHEDULER_ENABLED, CORS_ORIGINS
-   Frontend: NEXT_PUBLIC_API_URL
-
- Notes:
-   - Do NOT put backend/.env on the platform; paste values as env vars.
-   - Redis is NOT required (REDIS_URL is unused at runtime).
-   - First deploy may take a few minutes (Chromium install).
-   - Railway bills only active projects; delete the project to stop costs.
-
+ Status: RENDER SELECTED - prepared and ready to deploy
 ================================================================
 
-1. THE KEY CONSTRAINT (IMPORTANT)
-----------------------------------------------------------------
-The Telegram agent REQUIRES a host that keeps a long-running server
-process running 24/7. It CANNOT go on Vercel (or any pure-serverless
-platform). Reason:
+ 1. PLATFORM DECISION
+ -----------------------------------------------------------------
+ Render was chosen. It is NOT the ideal platform for a 24/7
+ background agent (free tier sleeps after 15 min idle), so the
+ backend MUST run on the paid "Starter" plan (~$7/month) to keep
+ the APScheduler + Telegram bot alive around the clock.
 
-  - The background scheduler (APScheduler) runs in memory inside the
-    backend process.
-  - The Telegram bot uses a continuous long-polling thread
-    (getUpdates with timeout=25s).
+   - Backend  : Starter (always-on)  -> required for the agent
+   - Frontend : Free tier            -> fine, serves UI on demand
+   - Database : Render Postgres (free / starter) -> see notes below
 
-If the platform stops the process after a request (serverless) or
-sleeps it after inactivity (Render free tier), the hourly scans,
-daily summaries, weekly reports, and Telegram alerts all stop.
+ 2. WHAT IS ALREADY PREPARED IN THIS REPO (committed)
+ -----------------------------------------------------------------
+   - render.yaml          : Render Blueprint - one-click deploy of
+                            Postgres + backend + frontend with all
+                            cross-service env vars wired up.
+   - backend/Dockerfile   : Python 3.12 + Playwright Chromium
+                            (--with-deps), TZ=Asia/Kolkata, runs
+                            app.seed (idempotent) before uvicorn,
+                            listens on $PORT.
+   - frontend/Dockerfile  : Node 22 + Next.js build, listens on $PORT.
+   - backend/.dockerignore: keeps .env, .venv, logs, db out of image.
+   - frontend/.dockerignore: keeps node_modules/.next out of image.
+   - backend/app/config.py: CORS_ORIGINS accepts BOTH a JSON array
+                            (local) and a plain URL / comma list
+                            (Render injects the frontend URL via
+                            fromService).
+   - scheduler timezone   : Asia/Kolkata (daily summary 20:00 = 8 PM IST).
+   - requirements.txt     : tzdata included so zoneinfo works.
 
-  -> Pick a platform with "always-on" web services / VPS / Fly.io.
+ 3. DEPLOY VIA BLUEPRINT (recommended, no CLI needed)
+ -----------------------------------------------------------------
+   1. Push repo to GitHub (already: github.com/jatinsinhsolanki0102-eng/Jobpilot).
+   2. Render dashboard -> New -> Blueprint -> select the Jobpilot repo.
+      Render reads render.yaml and proposes the 3 resources:
+      - jobpilot-db       (Postgres)
+      - jobpilot-backend  (web service, Starter)
+      - jobpilot-frontend (web service, Free)
+   3. Click Apply. Render prompts for the placeholder secrets:
+      - GROQ_API_KEY        = <from backend/.env>  (optional, heuristic fallback if empty)
+      - TELEGRAM_BOT_TOKEN  = <from backend/.env>  (optional, bot reports "not configured" if empty)
+      Everything else (DATABASE_URL, SECRET_KEY, CORS_ORIGINS,
+      NEXT_PUBLIC_API_URL, SCHEDULER_ENABLED) is wired automatically.
+   4. Wait for both services to reach "Live" (first backend deploy
+      takes a few minutes - Chromium install).
+   5. Check backend logs for "Database ready", "Background scheduler
+      started" and "Telegram bot polling started". Open the backend
+      URL -> /health should return {"status":"ok",...}.
+   6. Open the frontend URL in a browser. Register, upload resume,
+      set preferences, browse ranked jobs, connect Telegram.
 
-2. WHAT WE ALREADY HAVE
-----------------------------------------------------------------
-  - docker-compose.yml        (postgres + redis + backend + frontend)
-  - backend/Dockerfile        (python:3.12-slim + uvicorn)
-  - frontend/Dockerfile       (node:22-alpine + next build)
+ 4. DATABASE NOTES (IMPORTANT)
+ -----------------------------------------------------------------
+   - Render FREE Postgres expires 30 days after creation and is
+     deleted. For a real deployment use the paid plan (Starter
+     Postgres ~$7/month) or export/restore before the deadline.
+   - To change the DB plan: Render dashboard -> your Postgres ->
+     Settings -> Plan. (Blueprint may pin "free"; adjust manually.)
+   - The backend creates tables automatically on first start via
+     app.seed (create_all + 15 sample jobs) - no manual migration.
 
-3. TWO THINGS TO FIX BEFORE DEPLOYING
-----------------------------------------------------------------
-  a) Playwright Chromium is NOT installed in the backend Docker image.
-     The Internshala scanner + /search command will crash on a server.
-     Fix: in backend/Dockerfile add:
-        RUN python -m playwright install chromium --with-deps
+ 5. TELEGRAM + SCHEDULER REQUIREMENT (IMPORTANT)
+ -----------------------------------------------------------------
+   - The Telegram agent + APScheduler live INSIDE the backend
+     process (in-memory). If the backend sleeps (free tier) the
+     hourly scans, daily summaries, weekly reports and alerts stop.
+   - Backend MUST stay on Starter (or higher) plan. Verify after
+     deploy that the service shows "Always On" under Instances.
+   - After first deploy, restart the backend once from the Render
+     dashboard if the bot did not start polling (token pickup).
 
-  b) Scheduler timezone is UTC. The daily summary is set to hour=20
-     which is 20:00 UTC = 1:30 AM India time. If you want 8 PM IST:
-        - either set DAILY_SUMMARY_HOUR to 14 (14:30 UTC = 8 PM IST)
-          and WEEKLY_REPORT_HOUR to 14
-        - or change scheduler.py timezone from "UTC" to "Asia/Kolkata"
-     Decide based on where the server runs and your timezone.
+ 6. ENVIRONMENT VARIABLES SUMMARY (never commit secrets)
+ -----------------------------------------------------------------
+   Backend:  DATABASE_URL (auto), GROQ_API_KEY, TELEGRAM_BOT_TOKEN,
+             TELEGRAM_BOT_USERNAME, SECRET_KEY (auto-generated),
+             SCHEDULER_ENABLED=true, CORS_ORIGINS (auto)
+   Frontend: NEXT_PUBLIC_API_URL (auto)
+   Auto = wired by render.yaml via fromDatabase / fromService /
+           generateValue. Do NOT paste backend/.env on the platform.
 
-4. SECRETS NEEDED ON THE PLATFORM (never commit these)
-----------------------------------------------------------------
-  - GROQ_API_KEY            (already in backend/.env)
-  - TELEGRAM_BOT_TOKEN      (already in backend/.env)
-  - TELEGRAM_BOT_USERNAME=JobPilot_Update_AI_Bot
-  - A DATABASE_URL for a managed PostgreSQL
-  - SECRET_KEY (set a long random one for production)
+ 7. CHANGING REGION / CUSTOM DOMAIN
+ -----------------------------------------------------------------
+   - Region is set to singapore (nearest to India) in render.yaml.
+   - Optional: add a custom domain per service (Dashboard ->
+     service -> Settings -> Custom Domain). If you change the
+     frontend URL, CORS_ORIGINS and NEXT_PUBLIC_API_URL follow
+     automatically on redeploy (they reference RENDER_EXTERNAL_URL).
 
-  NOTE: backend/.env is gitignored - do NOT commit it. Paste these
-  as environment variables on the platform instead.
+ 8. COST EXPECTATIONS
+ -----------------------------------------------------------------
+   - Backend Starter web service : ~$7/month
+   - Render Postgres Starter     : ~$7/month (free tier deletes after 30 days)
+   - Frontend Free               : $0
+   - Total approx $14/month for a stable 24/7 agent with persistent DB.
+     Delete the project in the dashboard to stop all costs.
 
-5. PLATFORM OPTIONS (pros / cons)
-----------------------------------------------------------------
-  A) RAILWAY  (easiest for this stack - recommended)
-     + One-click deploy, Docker support, built-in managed PostgreSQL
-     + Free starting credit; ~$5/month after; web services stay on
-     + Two services: backend (FastAPI) + frontend (Next.js) + Postgres
-     - Slightly higher cost than a VPS once credit runs out
-
-  B) RENDER
-     + Free tier exists, easy setup
-     - FREE TIER SLEEPS AFTER 15 MIN IDLE -> bot stops. Not usable
-       for free for a 24/7 agent.
-     - Paid "always-on" web service ~$7/month (works, but costlier)
-     + Managed PostgreSQL available
-
-  C) FLY.IO
-     + Docker-based, free tier, long-running processes
-     + Free-ish managed Postgres option
-     - More setup/CLI work (flyctl commands), regional config
-     Good if comfortable with a little more technical setup.
-
-  D) HETZNER CLOUD VPS  (cheapest long-term, most control)
-     + ~4-6 EUR/month Ubuntu server, runs 24/7
-     + Run everything with the existing docker-compose.yml
-     + Can also host its own PostgreSQL inside the box
-     - You manage the server yourself (updates, security, SSL)
-     Best if you're fine with basic Linux.
-
-  E) NOT RECOMMENDED: Vercel (serverless - breaks scheduler + bot),
-     shared cPanel hosting (cannot run Python web services + Playwright).
-
-6. GENERIC DEPLOY STEPS (most platforms follow this)
-----------------------------------------------------------------
-  1. Push the repo to GitHub (or connect the platform to it).
-  2. Backend service:
-       - Build from backend/Dockerfile
-       - Env vars: DATABASE_URL, GROQ_API_KEY, TELEGRAM_BOT_TOKEN,
-                   TELEGRAM_BOT_USERNAME, SECRET_KEY, SCHEDULER_ENABLED=true
-       - Healthcheck/start: uvicorn app.main:app --host 0.0.0.0 --port 8000
-  3. Database service: managed PostgreSQL (Railway/Render/Fly)
-     - Create DB, copy its connection URL into backend DATABASE_URL.
-     - IMPORTANT: run migrations/create tables on first start.
-       Current app relies on create_all at startup (models) + optional
-       seed. Plan: run `python -m app.seed` once after first deploy
-       (or a startup hook) to create tables.
-  4. Frontend service:
-       - Build from frontend/Dockerfile with
-         NEXT_PUBLIC_API_URL=<your backend public URL>
-  5. Set the public URLs, get an HTTPS domain (free via platform).
-  6. Restart backend once after env vars are set so the Telegram bot
-     picks up the token and starts polling.
-
-7. NEXT STEP
-----------------------------------------------------------------
-User is researching and will choose a platform. Once chosen, I will:
-  - Fix the Dockerfiles (Playwright install, timezone, seed step)
-  - Prepare the platform config file (railway.json / render.yaml /
-    fly.toml / compose for VPS)
-  - Write a short deployment checklist for that platform
+ 9. OTHER PLATFORMS (for reference)
+ -----------------------------------------------------------------
+   - RAILWAY: similar one-click Docker + managed Postgres; ~$5/mo
+     after credit. Dockerfiles + railway.toml still present if you
+     ever want to switch.
+   - FLY.IO: Docker + free tier, more CLI work.
+   - HETZNER VPS: cheapest long-term, you manage everything.
+   - NOT recommended: Vercel (serverless breaks scheduler + bot),
+     shared cPanel hosting (cannot run Python + Playwright).
 
 ================================================================
