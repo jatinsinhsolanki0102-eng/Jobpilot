@@ -1,112 +1,94 @@
 ================================================================
  JOBPILOT AI - DEPLOYMENT NOTES
- Status: RENDER SELECTED - prepared and ready to deploy
+ Status: RAILWAY SELECTED - ready to deploy (trial)
 ================================================================
 
  1. PLATFORM DECISION
  -----------------------------------------------------------------
- Render was chosen. It is NOT the ideal platform for a 24/7
- background agent (free tier sleeps after 15 min idle), so the
- backend MUST run on the paid "Starter" plan (~$7/month) to keep
- the APScheduler + Telegram bot alive around the clock.
-
-   - Backend  : Starter (always-on)  -> required for the agent
-   - Frontend : Free tier            -> fine, serves UI on demand
-   - Database : Render Postgres (free / starter) -> see notes below
+ Railway was chosen. Free trial: one-time $5 credit, 30 days,
+ NO CREDIT CARD REQUIRED. After the trial, Railway reverts to the
+ Free plan with $1/month of credit - not enough to keep this stack
+ (2 services + Postgres) running 24/7, so the trial is a working
+ deployment to validate the app. Long-term hosting can be decided
+ after (paid Railway Hobby, Oracle Free VM, or an old machine).
 
  2. WHAT IS ALREADY PREPARED IN THIS REPO (committed)
  -----------------------------------------------------------------
-   - render.yaml          : Render Blueprint - one-click deploy of
-                            Postgres + backend + frontend with all
-                            cross-service env vars wired up.
-   - backend/Dockerfile   : Python 3.12 + Playwright Chromium
-                            (--with-deps), TZ=Asia/Kolkata, runs
-                            app.seed (idempotent) before uvicorn,
-                            listens on $PORT.
-   - frontend/Dockerfile  : Node 22 + Next.js build, listens on $PORT.
-   - backend/.dockerignore: keeps .env, .venv, logs, db out of image.
-   - frontend/.dockerignore: keeps node_modules/.next out of image.
-   - backend/app/config.py: CORS_ORIGINS accepts BOTH a JSON array
-                            (local) and a plain URL / comma list
-                            (Render injects the frontend URL via
-                            fromService).
-   - scheduler timezone   : Asia/Kolkata (daily summary 20:00 = 8 PM IST).
-   - requirements.txt     : tzdata included so zoneinfo works.
+   - backend/railway.toml   : DOCKERFILE build + healthcheck /health
+   - frontend/railway.toml  : DOCKERFILE build + healthcheck /
+   - backend/Dockerfile     : Python 3.12 + Playwright Chromium
+                              (--with-deps), TZ=Asia/Kolkata, listens
+                              on $PORT, runs app.seed (idempotent)
+                              before uvicorn via start.sh.
+   - frontend/Dockerfile    : Node 22 + Next.js build via start.sh.
+   - backend/.dockerignore  : keeps .env, .venv, logs, db out of image.
+   - frontend/.dockerignore : keeps node_modules/.next out of image.
+   - backend/app/config.py  : CORS_ORIGINS accepts a JSON array, a
+                              plain URL, or a comma list.
+   - scheduler timezone     : Asia/Kolkata (daily summary 20:00 = 8 PM IST).
+   - requirements.txt       : tzdata included so zoneinfo works.
 
- 3. DEPLOY VIA BLUEPRINT (recommended, no CLI needed)
+ 3. DEPLOY STEPS (Railway dashboard, no CLI needed)
  -----------------------------------------------------------------
-   1. Push repo to GitHub (already: github.com/jatinsinhsolanki0102-eng/Jobpilot).
-   2. Render dashboard -> New -> Blueprint -> select the Jobpilot repo.
-      Render reads render.yaml and proposes the 3 resources:
-      - jobpilot-db       (Postgres)
-      - jobpilot-backend  (web service, Starter)
-      - jobpilot-frontend (web service, Free)
-   3. Click Apply. Render prompts for the placeholder secrets:
-      - GROQ_API_KEY        = <from backend/.env>  (optional, heuristic fallback if empty)
-      - TELEGRAM_BOT_TOKEN  = <from backend/.env>  (optional, bot reports "not configured" if empty)
-      Everything else (DATABASE_URL, SECRET_KEY, CORS_ORIGINS,
-      NEXT_PUBLIC_API_URL, SCHEDULER_ENABLED) is wired automatically.
-   4. Wait for both services to reach "Live" (first backend deploy
-      takes a few minutes - Chromium install).
-   5. Check backend logs for "Database ready", "Background scheduler
-      started" and "Telegram bot polling started". Open the backend
-      URL -> /health should return {"status":"ok",...}.
-   6. Open the frontend URL in a browser. Register, upload resume,
-      set preferences, browse ranked jobs, connect Telegram.
+   1. Push repo to GitHub (done: github.com/jatinsinhsolanki0102-eng/Jobpilot).
+   2. Go to railway.com -> Login with GitHub (free trial, no card).
+   3. New Project -> Deploy from GitHub repo -> select Jobpilot.
+   4. Provision PostgreSQL: click + New -> Database -> PostgreSQL.
+      Railway auto-injects DATABASE_URL into the backend service.
+   5. Backend service (the container built from backend/Dockerfile):
+      - Settings -> General -> Root Directory = backend
+      - Variables tab, add:
+          GROQ_API_KEY          = <from backend/.env>
+          TELEGRAM_BOT_TOKEN    = <from backend/.env>
+          TELEGRAM_BOT_USERNAME = JobPilot_Update_AI_Bot
+          SECRET_KEY            = <long random string>
+          SCHEDULER_ENABLED     = true
+          CORS_ORIGINS          = ["https://<frontend-domain>"]
+        (DATABASE_URL comes automatically from the Postgres plugin)
+      - Deploy. Check logs for "Database ready",
+        "Background scheduler started", "Telegram bot polling started".
+        Open the public URL -> /health returns {"status":"ok",...}.
+   6. Frontend service (built from frontend/Dockerfile):
+      - Settings -> General -> Root Directory = frontend
+      - Variables tab, add: NEXT_PUBLIC_API_URL = https://<backend-domain>
+        (copy the backend public URL, e.g. https://<name>.up.railway.app)
+      - Redeploy once the variable is set (NEXT_PUBLIC_* is baked
+        at build time).
+   7. Verify end-to-end:
+      - Open frontend URL, register, upload resume, browse ranked jobs.
+      - Message the Telegram bot: /start then /link <code> from the app.
+      - Watch backend logs for a scheduled scan.
 
- 4. DATABASE NOTES (IMPORTANT)
- -----------------------------------------------------------------
-   - Render FREE Postgres expires 30 days after creation and is
-     deleted. For a real deployment use the paid plan (Starter
-     Postgres ~$7/month) or export/restore before the deadline.
-   - To change the DB plan: Render dashboard -> your Postgres ->
-     Settings -> Plan. (Blueprint may pin "free"; adjust manually.)
-   - The backend creates tables automatically on first start via
-     app.seed (create_all + 15 sample jobs) - no manual migration.
+ Environment variables summary (never commit secrets):
+   Backend:  DATABASE_URL, GROQ_API_KEY, TELEGRAM_BOT_TOKEN,
+             TELEGRAM_BOT_USERNAME, SECRET_KEY, SCHEDULER_ENABLED, CORS_ORIGINS
+   Frontend: NEXT_PUBLIC_API_URL
 
- 5. TELEGRAM + SCHEDULER REQUIREMENT (IMPORTANT)
+ 4. DATABASE NOTES
  -----------------------------------------------------------------
-   - The Telegram agent + APScheduler live INSIDE the backend
-     process (in-memory). If the backend sleeps (free tier) the
-     hourly scans, daily summaries, weekly reports and alerts stop.
-   - Backend MUST stay on Starter (or higher) plan. Verify after
-     deploy that the service shows "Always On" under Instances.
-   - After first deploy, restart the backend once from the Render
-     dashboard if the bot did not start polling (token pickup).
+   - Tables are created automatically on first start (app.seed uses
+     create_all + seeds 15 sample jobs) - no manual migration.
+   - Railway free-trial databases/volumes are deleted 30 days after
+     the trial credit expires - export before then if you keep going.
 
- 6. ENVIRONMENT VARIABLES SUMMARY (never commit secrets)
+ 5. TRIAL COST / TIMELINE
  -----------------------------------------------------------------
-   Backend:  DATABASE_URL (auto), GROQ_API_KEY, TELEGRAM_BOT_TOKEN,
-             TELEGRAM_BOT_USERNAME, SECRET_KEY (auto-generated),
-             SCHEDULER_ENABLED=true, CORS_ORIGINS (auto)
-   Frontend: NEXT_PUBLIC_API_URL (auto)
-   Auto = wired by render.yaml via fromDatabase / fromService /
-           generateValue. Do NOT paste backend/.env on the platform.
+   - $5 one-time credit, up to 30 days. This stack (2 web services +
+     Postgres, always-on) consumes roughly $3-6/month, so the trial
+     may last ~1-4 weeks depending on traffic/CPU.
+   - After credit runs out: revert to Free plan ($1/month credit,
+     services shut down if they exceed it) or upgrade to Hobby
+     ($5/month, requires a credit card).
 
- 7. CHANGING REGION / CUSTOM DOMAIN
+ 6. OTHER PLATFORMS (for reference)
  -----------------------------------------------------------------
-   - Region is set to singapore (nearest to India) in render.yaml.
-   - Optional: add a custom domain per service (Dashboard ->
-     service -> Settings -> Custom Domain). If you change the
-     frontend URL, CORS_ORIGINS and NEXT_PUBLIC_API_URL follow
-     automatically on redeploy (they reference RENDER_EXTERNAL_URL).
-
- 8. COST EXPECTATIONS
- -----------------------------------------------------------------
-   - Backend Starter web service : ~$7/month
-   - Render Postgres Starter     : ~$7/month (free tier deletes after 30 days)
-   - Frontend Free               : $0
-   - Total approx $14/month for a stable 24/7 agent with persistent DB.
-     Delete the project in the dashboard to stop all costs.
-
- 9. OTHER PLATFORMS (for reference)
- -----------------------------------------------------------------
-   - RAILWAY: similar one-click Docker + managed Postgres; ~$5/mo
-     after credit. Dockerfiles + railway.toml still present if you
-     ever want to switch.
-   - FLY.IO: Docker + free tier, more CLI work.
-   - HETZNER VPS: cheapest long-term, you manage everything.
+   - RENDER: blueprints in render.yaml; free tier SLEEPS after 15 min
+     idle -> bot stops. Paid Starter ~$7/mo keeps it always-on.
+   - ORACLE CLOUD: Always Free ARM VM (4 OCPU / 24 GB) runs 24/7
+     for $0; needs a credit card just for signup verification.
+   - OLD LAPTOP / RASPBERRY PI: run docker-compose.yml at home for
+     $0 with Cloudflare Tunnel for HTTPS; no card needed.
    - NOT recommended: Vercel (serverless breaks scheduler + bot),
-     shared cPanel hosting (cannot run Python + Playwright).
+     shared cPanel hosting.
 
 ================================================================
