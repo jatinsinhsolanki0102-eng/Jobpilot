@@ -4,17 +4,20 @@ ENV TZ=Asia/Kolkata
 
 WORKDIR /app
 
-COPY package.json package-lock.json* ./
+# Install dependencies
+COPY package*.json ./
 RUN npm ci
 
+# Copy source
 COPY . .
 
-ARG NEXT_PUBLIC_API_URL=http://localhost:8000
-ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+# Railway environment variables will be available during build.
+# Do NOT hardcode NEXT_PUBLIC_API_URL here.
 
+# Build Next.js app
 RUN npm run build
 
 EXPOSE 3000
 
-# PORT is set by Railway; falls back to 3000 for docker-compose.
+# Railway provides PORT automatically.
 CMD ["sh", "/app/start.sh"]

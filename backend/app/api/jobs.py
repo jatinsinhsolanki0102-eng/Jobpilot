@@ -9,7 +9,11 @@ from ..database import get_db
 from ..models import Application, Job, Preference, Resume, User
 from ..schemas import JobDetail, MatchBreakdown, RankedJob
 from ..services.ai import generate_cover_letter
-from ..services.job_sources import sync_internshala
+from ..services.job_sources import (
+    SOURCE_LABELS,
+    source_available,
+    sync_source,
+)
 from ..services.matching import ai_match_score, match_scores, rank_jobs
 from ..services.serializers import job_to_dict, pref_to_dict
 from .deps import get_current_user
@@ -52,6 +56,7 @@ def list_jobs(
 
 
 class SyncRequest(BaseModel):
+    source: str = Field(default="internshala", max_length=40)
     query: str | None = Field(default=None, max_length=120)
     location: str | None = Field(default=None, max_length=80)
     internship: bool = True
@@ -65,16 +70,27 @@ def sync_jobs(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Scrape Internshala listings and upsert them into the local job store."""
-    result = sync_internshala(
-        db=db,
-        query=payload.query or None,
-        location=payload.location or None,
-        internship=payload.internship,
-        limit=payload.limit,
-        with_details=payload.with_details,
-    )
-    return result
+    """Scrape listings from a supported platform and upsert them locally."""
+    if not source_available(payload.source):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unknown job source '{payload.source}'. "
+                f"Supported: {', '.join(sorted(SOURCE_LABELS))}"
+            ),
+        )
+    try:
+        return sync_source(
+            db=db,
+            source=payload.source,
+            query=payload.query or None,
+            location=payload.location or None,
+            internship=payload.internship,
+            limit=payload.limit,
+            with_details=payload.with_details,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/sources")
@@ -83,7 +99,15 @@ def list_sources(
     db: Session = Depends(get_db),
 ) -> list[dict]:
     rows = db.execute(select(Job.source, func.count(Job.id)).group_by(Job.source)).all()
-    return [{"source": source, "count": count} for source, count in rows]
+    counts = {source: count for source, count in rows}
+    known = [{"key": k, "label": v} for k, v in sorted(SOURCE_LABELS.items())]
+    for entry in known:
+        entry["count"] = counts.get(entry["key"], 0)
+    if counts:
+        known.insert(0, {"key": "", "label": "All", "count": sum(counts.values())})
+    else:
+        known.insert(0, {"key": "", "label": "All", "count": 0})
+    return known
 
 
 @router.get("/{job_id}", response_model=JobDetail)

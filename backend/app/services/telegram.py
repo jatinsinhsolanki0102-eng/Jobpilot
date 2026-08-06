@@ -90,7 +90,7 @@ def format_job_alert(job: dict, match: dict | None) -> str:
     )
 
     lines = [
-        "🚀 <b>New Internship Found</b>",
+        "🚀 <b>New Opportunity Found</b>",
         "",
         "🏢 <b>Company</b>",
         escape_html(job.get("company_name") or "-"),
@@ -104,6 +104,9 @@ def format_job_alert(job: dict, match: dict | None) -> str:
         "",
         "💵 <b>Stipend</b>",
         _fmt_salary(job),
+        "",
+        "🌐 <b>Source</b>",
+        escape_html(job.get("source") or "JobPilot"),
         "",
         "⏱ <b>Duration</b>",
         escape_html(job.get("experience_required") or "Not specified"),
@@ -136,7 +139,7 @@ def format_job_alert(job: dict, match: dict | None) -> str:
 def format_daily_summary(data: dict) -> str:
     best = data.get("best") or {}
     lines = [
-        "📊 <b>Daily Internship Report</b>",
+        "📊 <b>Daily Opportunity Report</b>",
         "",
         f"🔎 Jobs Scanned: <b>{data.get('scanned', 0)}</b>",
         f"✅ Matched: <b>{data.get('matched', 0)}</b>",
@@ -261,8 +264,9 @@ class TelegramBot:
         self.send_message(
             chat,
             "👋 <b>Welcome to JobPilot AI!</b>\n\n"
-            "I watch Internshala for opportunities matching your resume and "
-            "send you the best ones automatically.\n\n"
+            "I watch Internshala, LinkedIn, Wellfound, Naukri and Unstop for "
+            "opportunities matching your resume and send you the best ones "
+            "automatically.\n\n"
             "To connect this chat to your JobPilot account:\n"
             "1. Open the JobPilot web app → <b>Telegram</b> page\n"
             "2. Click <b>Link Telegram</b> to get a 6-digit code\n"
@@ -308,7 +312,7 @@ class TelegramBot:
                 chat,
                 "✅ <b>Account linked!</b>\n\n"
                 "Your Telegram chat is now connected to your JobPilot account. "
-                "I'll start sending you matched internships automatically.",
+                "I'll start sending you matched opportunities automatically.",
             )
         finally:
             db.close()
@@ -405,7 +409,7 @@ class TelegramBot:
                 lines.append(
                     f"{i}. <b>{escape_html(j['title'])}</b> @ {escape_html(j['company_name'])}"
                     f"\n   {j['match']['score']:.0f}% match · {escape_html(j.get('location') or 'Remote')}"
-                    f"\n   {j.get('url') or '-'}"
+                    f"\n   [{escape_html(j.get('source') or 'JobPilot')}] {j.get('url') or '-'}"
                 )
             self.send_message(chat, "\n".join(lines))
         finally:
@@ -419,36 +423,37 @@ class TelegramBot:
         if not query:
             self.send_message(
                 chat,
-                "Usage: <code>/search python</code> — I'll find matching internships.",
+                "Usage: <code>/search python</code> — I'll find matching jobs "
+                "across Internshala, LinkedIn, Wellfound, Naukri and Unstop.",
             )
             return
         self.send_message(
-            chat, f"🔎 Searching Internshala for <b>{escape_html(query)}</b>…"
+            chat, f"🔎 Searching all platforms for <b>{escape_html(query)}</b>…"
         )
-        from ..services.job_sources import InternshalaSource
+        from ..services.job_sources import SOURCE_CLASSES
 
-        try:
-            raw = InternshalaSource().scrape(
-                query=query, internship=True, limit=3, with_details=False
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Telegram search failed: %s", exc)
+        found: list = []
+        for name, cls in SOURCE_CLASSES.items():
+            try:
+                batch = cls().scrape(
+                    query=query, internship=True, limit=3, with_details=False
+                )
+                found.extend(batch)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Telegram search failed for %s: %s", name, exc)
+        if not found:
             self.send_message(
                 chat,
-                "⚠️ Search failed. Internshala may be blocking automated access right now.",
-            )
-            return
-        if not raw:
-            self.send_message(
-                chat, f"No internships found for <b>{escape_html(query)}</b>."
+                f"No opportunities found for <b>{escape_html(query)}</b> "
+                "right now.",
             )
             return
         lines = [f"🔍 <b>Results for: {escape_html(query)}</b>", ""]
-        for j in raw:
+        for j in found[:10]:
             lines.append(
                 f"• <b>{escape_html(j.title)}</b> @ {escape_html(j.company_name)}"
                 f"\n  {escape_html(j.location or 'Remote')} · {_fmt_salary(j.model_dump())}"
-                f"\n  {j.url or '-'}"
+                f"\n  [{escape_html(j.source)}] {j.url or '-'}"
             )
         self.send_message(chat, "\n".join(lines))
 
@@ -528,9 +533,9 @@ class TelegramBot:
             "/start — Welcome message\n"
             "/link CODE — Link this chat to your account\n"
             "/profile — Resume summary + preferences\n"
-            "/jobs — Today's best internships\n"
-            "/top — Highest AI-matched internships\n"
-            "/search python — Search internships\n"
+            "/jobs — Today's best matches\n"
+            "/top — Highest AI-matched opportunities\n"
+            "/search python — Search all platforms\n"
             "/saved — Your saved jobs\n"
             "/status — System status\n"
             "/help — This help",

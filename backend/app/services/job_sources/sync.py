@@ -6,10 +6,34 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ...models import Company, Job
-from .base import RawJob
+from .base import JobSource, RawJob
 from .internshala import InternshalaSource
+from .linkedin import LinkedInSource
+from .naukri import NaukriSource
+from .unstop import UnstopSource
+from .wellfound import WellfoundSource
 
 logger = logging.getLogger(__name__)
+
+SOURCE_CLASSES: dict[str, type[JobSource]] = {
+    "internshala": InternshalaSource,
+    "linkedin": LinkedInSource,
+    "wellfound": WellfoundSource,
+    "naukri": NaukriSource,
+    "unstop": UnstopSource,
+}
+
+SOURCE_LABELS: dict[str, str] = {
+    "internshala": "Internshala",
+    "linkedin": "LinkedIn",
+    "wellfound": "Wellfound",
+    "naukri": "Naukri",
+    "unstop": "Unstop",
+}
+
+
+def source_available(source: str) -> bool:
+    return source in SOURCE_CLASSES
 
 
 def _apply_fields(job: Job, raw: RawJob) -> None:
@@ -56,21 +80,31 @@ def upsert_raw_jobs(db: Session, raw_jobs: list[RawJob]) -> dict:
     return {"added": added, "updated": updated}
 
 
-def sync_internshala(
+def sync_source(
     db: Session,
+    source: str,
     query: str | None = None,
     location: str | None = None,
     internship: bool = True,
     limit: int = 20,
     with_details: bool = True,
+    **kwargs,
 ) -> dict:
-    source = InternshalaSource()
-    raw_jobs = source.scrape(
+    """Scrape a given source and upsert listings. Raises ValueError for unknown sources."""
+    cls = SOURCE_CLASSES.get(source)
+    if cls is None:
+        raise ValueError(
+            f"Unknown job source '{source}'. "
+            f"Available: {', '.join(sorted(SOURCE_CLASSES))}"
+        )
+    scraper = cls()
+    raw_jobs = scraper.scrape(
         query=query,
         location=location,
         internship=internship,
         limit=limit,
         with_details=with_details,
+        **kwargs,
     )
     failed = 0
     for raw in raw_jobs:
@@ -79,9 +113,29 @@ def sync_internshala(
     valid = [r for r in raw_jobs if r.title and r.company_name]
     counts = upsert_raw_jobs(db, valid)
     return {
-        "source": "internshala",
+        "source": source,
+        "source_label": SOURCE_LABELS.get(source, source),
         "total_found": len(raw_jobs),
         "added": counts["added"],
         "updated": counts["updated"],
         "failed": failed,
     }
+
+
+def sync_internshala(
+    db: Session,
+    query: str | None = None,
+    location: str | None = None,
+    internship: bool = True,
+    limit: int = 20,
+    with_details: bool = True,
+) -> dict:
+    return sync_source(
+        db,
+        source="internshala",
+        query=query,
+        location=location,
+        internship=internship,
+        limit=limit,
+        with_details=with_details,
+    )

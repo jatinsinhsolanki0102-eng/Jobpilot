@@ -10,8 +10,13 @@ import { cn, timeAgo } from "@/lib/utils";
 const SOURCES = [
   { key: "", label: "All" },
   { key: "internshala", label: "Internshala" },
-  { key: "JobPilot", label: "Sample" },
+  { key: "linkedin", label: "LinkedIn" },
+  { key: "wellfound", label: "Wellfound" },
+  { key: "naukri", label: "Naukri" },
+  { key: "unstop", label: "Unstop" },
 ];
+
+const SOURCE_LABELS = Object.fromEntries(SOURCES.map((s) => [s.key, s.label]));
 
 export default function JobsPage() {
   const [jobs, setJobs] = useState<RankedJob[]>([]);
@@ -43,9 +48,10 @@ export default function JobsPage() {
     setSyncing(true);
     setSyncMsg("");
     api
-      .post<{ added: number; updated: number; total_found: number; failed: number }>(
+      .post<{ added: number; updated: number; total_found: number; failed: number; source_label?: string }>(
         "/api/v1/jobs/sync",
         {
+          source: source || "internshala",
           query: query.trim() || null,
           location: null,
           internship: true,
@@ -54,8 +60,9 @@ export default function JobsPage() {
         }
       )
       .then((res) => {
+        const label = res.source_label ?? SOURCE_LABELS[source] ?? source ?? "platform";
         setSyncMsg(
-          `Synced ${res.total_found} Internshala listings (${res.added} new, ${res.updated} updated)`
+          `Synced ${res.total_found} ${label} listings (${res.added} new, ${res.updated} updated)`
         );
         return reload(source);
       })
@@ -86,7 +93,9 @@ export default function JobsPage() {
           />
           <Button onClick={handleSync} disabled={syncing}>
             {syncing && <Spinner className="h-4 w-4 border-zinc-300 border-t-transparent" />}
-            {syncing ? "Syncing…" : "Sync Internshala"}
+            {syncing
+              ? "Syncing…"
+              : `Sync ${SOURCE_LABELS[source] ?? "Internshala"}`}
           </Button>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
@@ -113,7 +122,6 @@ export default function JobsPage() {
           {syncMsg}
         </p>
       )}
-
       {error ? (
         <EmptyState icon="⚠️" title="Couldn't load jobs" description={error} />
       ) : loading ? (
@@ -124,14 +132,14 @@ export default function JobsPage() {
         <EmptyState
           icon="💼"
           title="No jobs yet"
-          description="Upload a resume and set preferences to unlock ranked matches, or sync live listings from Internshala."
+          description="Upload a resume and set preferences to unlock ranked matches, or sync live listings from Internshala, LinkedIn, Wellfound, Naukri or Unstop."
           action={
             <div className="flex gap-2">
               <Link href="/resume">
                 <Button>Upload resume</Button>
               </Link>
               <Button variant="outline" onClick={handleSync} disabled={syncing}>
-                {syncing ? "Syncing…" : "Sync from Internshala"}
+                {syncing ? "Syncing…" : "Sync from a platform"}
               </Button>
             </div>
           }
@@ -157,6 +165,7 @@ export default function JobsPage() {
                         {job.employment_type ? ` · ${job.employment_type}` : ""}
                       </p>
                       <p className="mt-1 text-xs text-zinc-600">
+                        {job.source ? `${job.source} · ` : ""}
                         {formatSalary(job.salary_min, job.salary_max, job.salary_currency)}
                         {job.experience_required
                           ? ` · Exp: ${job.experience_required}`

@@ -362,8 +362,8 @@ export default function TelegramPage() {
           <div>
             <h2 className="font-semibold">Run a scan now</h2>
             <p className="text-sm text-zinc-500">
-              Scrape Internshala, match against your profile, and push alerts to
-              Telegram.
+              Scrape Internshala, LinkedIn, Wellfound, Naukri and Unstop, match
+              against your profile, and push alerts to Telegram.
             </p>
           </div>
           <Button

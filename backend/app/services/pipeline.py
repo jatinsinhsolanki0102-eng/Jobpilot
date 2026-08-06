@@ -20,7 +20,7 @@ from ..models import (
     TelegramLink,
     User,
 )
-from .job_sources import InternshalaSource, upsert_raw_jobs
+from .job_sources import SOURCE_CLASSES, upsert_raw_jobs
 from .matching import rank_jobs
 from .serializers import job_to_dict, pref_to_dict
 from .telegram import bot, format_job_alert
@@ -220,15 +220,29 @@ def run_user_scan(user_id: int) -> dict:
         query = keywords[0]
         logger.info("Scan for user %s (keyword=%s)", user_id, query)
 
-        raw = InternshalaSource().scrape(
-            query=query,
-            internship=True,
-            limit=SCAN_LIMIT,
-            pages=SCAN_PAGES,
-            with_details=True,
-        )
-        upsert_raw_jobs(db, raw)
-        source_ids = {r.source_id for r in raw}
+        all_raw: list = []
+        for name, cls in SOURCE_CLASSES.items():
+            try:
+                batch = cls().scrape(
+                    query=query,
+                    internship=True,
+                    limit=SCAN_LIMIT,
+                    pages=SCAN_PAGES,
+                    with_details=True,
+                )
+                logger.info(
+                    "Scraped source=%s for user %s: %d listings",
+                    name,
+                    user_id,
+                    len(batch),
+                )
+                all_raw.extend(batch)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Scrape failed for source=%s user=%s: %s", name, user_id, exc
+                )
+        upsert_raw_jobs(db, all_raw)
+        source_ids = {r.source_id for r in all_raw}
         if not source_ids:
             # Reset the cadence so a transient scrape failure doesn't cause a
             # re-scan on the very next scheduler tick.

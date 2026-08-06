@@ -43,6 +43,15 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
     ]
 
+    # Scraper anti-bot bypass (optional). Provide cookies from a logged-in
+    # browser session to pass DataDome/Akamai, and/or a proxy URL.
+    # Cookie format: "name=value; name2=value2"
+    LINKEDIN_COOKIES: str | None = None
+    WELLFOUND_COOKIES: str | None = None
+    NAUKRI_COOKIES: str | None = None
+    UNSTOP_COOKIES: str | None = None
+    SCRAPER_PROXY: str | None = None
+
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def _decode_cors_origins(cls, v):
