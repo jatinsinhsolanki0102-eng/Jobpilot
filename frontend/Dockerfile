@@ -11,8 +11,11 @@ RUN npm ci
 # Copy source
 COPY . .
 
-# Railway environment variables will be available during build.
-# Do NOT hardcode NEXT_PUBLIC_API_URL here.
+# Railway injects service variables during the build, but Docker only exposes
+# them to `next build` if declared as ARG here. NEXT_PUBLIC_* vars are inlined
+# into the client bundle at build time.
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
 # Build Next.js app
 RUN npm run build
