@@ -516,7 +516,7 @@ class TelegramBot:
                 f"Bot: {'✅ Online' if self.available else '⚠️ Token not set'}",
                 f"Account: {'✅ Linked' if link and link.enabled else '❌ Not linked'}",
                 f"Notifications: {'✅ Enabled' if (ns and ns.notify_enabled) else '⏸ Disabled'}",
-                f"Min match score: {ns.min_match_score if ns else 50}%",
+                f"Min match score: {ns.min_match_score if ns else 30}%",
                 f"Scan interval: every {ns.scheduler_interval_minutes if ns else 60} min",
                 f"Notifications sent: {sent}",
                 f"Jobs in store: {total_jobs}",

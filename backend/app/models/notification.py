@@ -33,7 +33,7 @@ class NotificationSettings(Base, TimestampMixin):
     )
 
     notify_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    min_match_score: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
+    min_match_score: Mapped[int] = mapped_column(Integer, default=30, nullable=False)
     scheduler_interval_minutes: Mapped[int] = mapped_column(
         Integer, default=60, nullable=False
     )

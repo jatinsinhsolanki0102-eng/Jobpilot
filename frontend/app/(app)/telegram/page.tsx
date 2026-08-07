@@ -59,7 +59,7 @@ export default function TelegramPage() {
 
   const [settings, setSettings] = useState<TelegramSettings>({
     notify_enabled: false,
-    min_match_score: 60,
+    min_match_score: 30,
     scheduler_interval_minutes: 60,
     search_keywords: [],
     max_per_scan: 5,
