@@ -6,10 +6,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ...models import Company, Job
+from .adzuna import AdzunaSource
 from .base import JobSource, RawJob
 from .internshala import InternshalaSource
 from .linkedin import LinkedInSource
 from .naukri import NaukriSource
+from .remotive import RemotiveSource
 from .unstop import UnstopSource
 from .wellfound import WellfoundSource
 
@@ -17,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 SOURCE_CLASSES: dict[str, type[JobSource]] = {
     "internshala": InternshalaSource,
+    "adzuna": AdzunaSource,
+    "remotive": RemotiveSource,
     "linkedin": LinkedInSource,
     "wellfound": WellfoundSource,
     "naukri": NaukriSource,
@@ -25,6 +29,8 @@ SOURCE_CLASSES: dict[str, type[JobSource]] = {
 
 SOURCE_LABELS: dict[str, str] = {
     "internshala": "Internshala",
+    "adzuna": "Adzuna",
+    "remotive": "Remotive",
     "linkedin": "LinkedIn",
     "wellfound": "Wellfound",
     "naukri": "Naukri",

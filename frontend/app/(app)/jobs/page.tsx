@@ -10,6 +10,8 @@ import { cn, timeAgo } from "@/lib/utils";
 const SOURCES = [
   { key: "", label: "All" },
   { key: "internshala", label: "Internshala" },
+  { key: "adzuna", label: "Adzuna" },
+  { key: "remotive", label: "Remotive" },
   { key: "linkedin", label: "LinkedIn" },
   { key: "wellfound", label: "Wellfound" },
   { key: "naukri", label: "Naukri" },

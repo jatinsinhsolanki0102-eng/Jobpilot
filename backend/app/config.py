@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     UNSTOP_COOKIES: str | None = None
     SCRAPER_PROXY: str | None = None
 
+    # Official job APIs (no scraping / anti-bot). Adzuna needs a free API key
+    # from https://developer.adzuna.com. Remotive needs no key.
+    ADZUNA_APP_ID: str | None = None
+    ADZUNA_APP_KEY: str | None = None
+
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def _decode_cors_origins(cls, v):

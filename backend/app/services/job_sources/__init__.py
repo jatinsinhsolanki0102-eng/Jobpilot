@@ -1,7 +1,9 @@
+from .adzuna import AdzunaSource
 from .base import JobSource, RawJob
 from .internshala import InternshalaSource
 from .linkedin import LinkedInSource
 from .naukri import NaukriSource
+from .remotive import RemotiveSource
 from .sync import (
     SOURCE_CLASSES,
     SOURCE_LABELS,
@@ -17,6 +19,8 @@ __all__ = [
     "JobSource",
     "RawJob",
     "InternshalaSource",
+    "AdzunaSource",
+    "RemotiveSource",
     "LinkedInSource",
     "WellfoundSource",
     "NaukriSource",
