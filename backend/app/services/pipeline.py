@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -34,6 +36,10 @@ FRESH_DAYS = 7
 # How many listings to scrape per scan (2 pages) so enough fresh jobs exist.
 SCAN_LIMIT = 40
 SCAN_PAGES = 2
+
+# Prevent the scheduler and a manual "Sync now" from scanning the same user
+# concurrently (which used to double-send notifications).
+_scan_locks: dict[int, threading.Lock] = defaultdict(threading.Lock)
 
 
 def _posted_dt(job: dict) -> datetime | None:
@@ -194,6 +200,10 @@ def _record_scan(db: Session, user_id: int, data: dict) -> None:
 
 def run_user_scan(user_id: int) -> dict:
     """Full background scan for one user: scrape -> match -> filter -> notify -> log."""
+    lock = _scan_locks[user_id]
+    if not lock.acquire(blocking=False):
+        logger.info("Scan already running for user %s; skipping", user_id)
+        return {"user_id": user_id, "skipped": "already_running"}
     db = SessionLocal()
     try:
         user = db.get(User, user_id)
@@ -293,6 +303,14 @@ def run_user_scan(user_id: int) -> dict:
         matched_count = sum(
             1 for j in ranked if j["match"]["score"] >= ns.min_match_score
         )
+        already_sent = set(
+            db.scalars(
+                select(NotificationLog.job_id).where(
+                    NotificationLog.user_id == user.id,
+                    NotificationLog.channel == "telegram",
+                )
+            )
+        )
         sent = 0
         ignored = 0
         best_score = 0.0
@@ -309,6 +327,9 @@ def run_user_scan(user_id: int) -> dict:
                 best_company = j["company_name"]
             ok, reason = _passes_filters(j, match, ns, pref)
             if not ok:
+                ignored += 1
+                continue
+            if j["id"] in already_sent:
                 ignored += 1
                 continue
             if sent >= ns.max_per_scan:
@@ -365,6 +386,7 @@ def run_user_scan(user_id: int) -> dict:
         return {"user_id": user_id, "error": str(exc)}
     finally:
         db.close()
+        lock.release()
 
 
 def users_due_for_scan(db: Session, now: datetime) -> list[User]:
