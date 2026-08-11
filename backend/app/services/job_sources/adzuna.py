@@ -112,13 +112,13 @@ class AdzunaSource(JobSource):
                     "content-type": "application/json",
                 }
                 if query:
-                    params["what"] = query
+                    params["what"] = f"{query} internship" if internship else query
                 if location:
                     params["where"] = location
                 # NOTE: Adzuna India does NOT accept employment_type=internship
-                # (it returns HTTP 400 and kills the whole source). Drop the
-                # type filter and rely on the keyword search + title matching
-                # (see _employment_type) so internships and fresher jobs flow.
+                # (it returns HTTP 400 and kills the whole source). Instead we
+                # append "internship" to the keyword search so real internships
+                # flow in for student users (see _employment_type too).
                 try:
                     resp = client.get(API_URL.format(page=page), params=params)
                     resp.raise_for_status()

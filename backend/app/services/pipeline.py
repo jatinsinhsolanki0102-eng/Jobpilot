@@ -64,6 +64,30 @@ def is_fresh(job: dict, days: int = FRESH_DAYS) -> bool:
     return (datetime.now(timezone.utc) - posted) <= timedelta(days=days)
 
 
+def _round_robin(jobs: list[dict]) -> list[dict]:
+    """Re-order ranked jobs round-robin across sources.
+
+    Jobs stay sorted by rank inside each source, but the top pick from every
+    source is offered before the strongest source repeats. This stops one
+    platform (e.g. Internshala) from monopolizing the daily notifications.
+    """
+    by_source: dict[str, list[dict]] = {}
+    for job in jobs:
+        by_source.setdefault(job.get("source") or "unknown", []).append(job)
+    ordered: list[dict] = []
+    idx = {src: 0 for src in by_source}
+    while True:
+        added = False
+        for src, src_jobs in by_source.items():
+            if idx[src] < len(src_jobs):
+                ordered.append(src_jobs[idx[src]])
+                idx[src] += 1
+                added = True
+        if not added:
+            break
+    return ordered
+
+
 def default_settings(db: Session, user: User) -> NotificationSettings:
     ns = user.notification_settings
     if ns is None:
@@ -306,14 +330,16 @@ def run_user_scan(user_id: int) -> dict:
         # Re-send the best matching jobs every scan so the user keeps getting
         # updates (capped by max_per_scan). The per-user scan lock above plus
         # APScheduler's max_instances prevent duplicate sends from overlapping
-        # scheduler + manual runs.
+        # scheduler + manual runs. Round-robin across sources so one platform
+        # (e.g. Internshala) can't fill every slot.
+        send_order = _round_robin(ranked)
         sent = 0
         ignored = 0
         best_score = 0.0
         best_title = best_company = ""
         score_sum = 0.0
 
-        for j in ranked:
+        for j in send_order:
             match = j["match"]
             if match["score"] >= ns.min_match_score:
                 score_sum += match["score"]
