@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timezone
 
 import httpx
 
@@ -74,22 +75,43 @@ class RemotiveSource(JobSource):
         with_details: bool = True,
         pages: int = 1,
     ) -> list[RawJob]:
-        params: dict = {"limit": min(max(limit, 1), 50)}
-        if query:
-            params["search"] = query
+        # Remotive's public API no longer honours the search/category/limit
+        # query params (it returns the same ~20 latest listings no matter what),
+        # so fetch the feed and filter locally against the query keywords.
         try:
             with httpx.Client(timeout=30) as client:
-                resp = client.get(API_URL, params=params)
+                resp = client.get(API_URL)
                 resp.raise_for_status()
                 jobs = resp.json().get("jobs", [])
         except httpx.HTTPError as exc:
             logger.warning("Remotive request failed: %s", exc)
             return []
 
+        tokens = [t for t in re.split(r"\W+", (query or "").lower()) if t]
         results: list[RawJob] = []
         for job in jobs:
             mapped = _map_job(job)
             if mapped is None:
                 continue
+            if tokens:
+                haystack = " ".join(
+                    filter(
+                        None,
+                        [
+                            mapped.title,
+                            mapped.company_name,
+                            mapped.description or "",
+                            " ".join(mapped.skills_required or []),
+                            mapped.employment_type or "",
+                        ]
+                    )
+                ).lower()
+                if not any(t in haystack for t in tokens):
+                    continue
             results.append(mapped)
+        # Newest first so the freshest listings are pushed to users.
+        results.sort(
+            key=lambda j: j.posted_at or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
         return results[:limit]

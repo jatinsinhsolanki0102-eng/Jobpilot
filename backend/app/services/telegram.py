@@ -264,7 +264,7 @@ class TelegramBot:
         self.send_message(
             chat,
             "👋 <b>Welcome to JobPilot AI!</b>\n\n"
-            "I watch Internshala, LinkedIn, Wellfound, Naukri and Unstop for "
+            "I watch Internshala, LinkedIn, Unstop, Adzuna and Remotive for "
             "opportunities matching your resume and send you the best ones "
             "automatically.\n\n"
             "To connect this chat to your JobPilot account:\n"
@@ -424,7 +424,7 @@ class TelegramBot:
             self.send_message(
                 chat,
                 "Usage: <code>/search python</code> — I'll find matching jobs "
-                "across Internshala, LinkedIn, Wellfound, Naukri and Unstop.",
+                "across Internshala, LinkedIn, Unstop, Adzuna and Remotive.",
             )
             return
         self.send_message(

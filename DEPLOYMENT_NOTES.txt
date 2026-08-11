@@ -35,19 +35,29 @@
    3. New Project -> Deploy from GitHub repo -> select Jobpilot.
    4. Provision PostgreSQL: click + New -> Database -> PostgreSQL.
       Railway auto-injects DATABASE_URL into the backend service.
-   5. Backend service (the container built from backend/Dockerfile):
-      - Settings -> General -> Root Directory = backend
-      - Variables tab, add:
-          GROQ_API_KEY          = <from backend/.env>
-          TELEGRAM_BOT_TOKEN    = <from backend/.env>
-          TELEGRAM_BOT_USERNAME = JobPilot_Update_AI_Bot
-          SECRET_KEY            = <long random string>
-          SCHEDULER_ENABLED     = true
-          CORS_ORIGINS          = ["https://<frontend-domain>"]
-        (DATABASE_URL comes automatically from the Postgres plugin)
-      - Deploy. Check logs for "Database ready",
-        "Background scheduler started", "Telegram bot polling started".
-        Open the public URL -> /health returns {"status":"ok",...}.
+    5. Backend service (the container built from backend/Dockerfile):
+       - Settings -> General -> Root Directory = backend
+       - Variables tab, add:
+           GROQ_API_KEY          = <from backend/.env>
+           TELEGRAM_BOT_TOKEN    = <from backend/.env>
+           TELEGRAM_BOT_USERNAME = JobPilot_Update_AI_Bot
+           SECRET_KEY            = <long random string>
+           SCHEDULER_ENABLED     = true
+           CORS_ORIGINS          = ["https://<frontend-domain>"]
+           ADZUNA_APP_ID         = <from backend/.env>
+           ADZUNA_APP_KEY        = <from backend/.env>
+         (DATABASE_URL comes automatically from the Postgres plugin)
+       - NOTE: ADZUNA_APP_ID/APP_KEY enable the Adzuna source (a rich stream
+         of Indian jobs). They are NOT in the Docker image, so they must be
+         added here or Adzuna is silently skipped.
+       - OPTIONAL anti-bot cookies (only needed for Naukri/Wellfound, which
+         block datacenter IPs with Akamai/DataDome):
+           NAUKRI_COOKIES        = "name=value; name2=value2"
+           WELLFOUND_COOKIES     = "name=value; name2=value2"
+           SCRAPER_PROXY         = <residential proxy URL, optional>
+       - Deploy. Check logs for "Database ready",
+         "Background scheduler started", "Telegram bot polling started".
+         Open the public URL -> /health returns {"status":"ok",...}.
    6. Frontend service (built from frontend/Dockerfile):
       - Settings -> General -> Root Directory = frontend
       - Variables tab, add: NEXT_PUBLIC_API_URL = https://<backend-domain>
@@ -61,7 +71,10 @@
 
  Environment variables summary (never commit secrets):
    Backend:  DATABASE_URL, GROQ_API_KEY, TELEGRAM_BOT_TOKEN,
-             TELEGRAM_BOT_USERNAME, SECRET_KEY, SCHEDULER_ENABLED, CORS_ORIGINS
+             TELEGRAM_BOT_USERNAME, SECRET_KEY, SCHEDULER_ENABLED, CORS_ORIGINS,
+             ADZUNA_APP_ID, ADZUNA_APP_KEY,
+             (optional) NAUKRI_COOKIES, WELLFOUND_COOKIES, LINKEDIN_COOKIES,
+             UNSTOP_COOKIES, SCRAPER_PROXY
    Frontend: NEXT_PUBLIC_API_URL
 
  4. DATABASE NOTES

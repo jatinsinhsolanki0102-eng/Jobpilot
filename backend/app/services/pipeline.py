@@ -303,14 +303,10 @@ def run_user_scan(user_id: int) -> dict:
         matched_count = sum(
             1 for j in ranked if j["match"]["score"] >= ns.min_match_score
         )
-        already_sent = set(
-            db.scalars(
-                select(NotificationLog.job_id).where(
-                    NotificationLog.user_id == user.id,
-                    NotificationLog.channel == "telegram",
-                )
-            )
-        )
+        # Re-send the best matching jobs every scan so the user keeps getting
+        # updates (capped by max_per_scan). The per-user scan lock above plus
+        # APScheduler's max_instances prevent duplicate sends from overlapping
+        # scheduler + manual runs.
         sent = 0
         ignored = 0
         best_score = 0.0
@@ -327,9 +323,6 @@ def run_user_scan(user_id: int) -> dict:
                 best_company = j["company_name"]
             ok, reason = _passes_filters(j, match, ns, pref)
             if not ok:
-                ignored += 1
-                continue
-            if j["id"] in already_sent:
                 ignored += 1
                 continue
             if sent >= ns.max_per_scan:

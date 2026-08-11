@@ -76,7 +76,7 @@ DATABASE_URL=postgresql+psycopg2://postgres:YOUR_PASSWORD@localhost:5432/jobpilo
 | 2 | Resume Intelligence Engine | ✅ Phase 1 |
 | 3 | User Preference Engine | ✅ Phase 1 |
 | 4 | Browser Automation Agent | ✅ Phase 2 (Playwright) |
-| 5 | Job Extraction Engine | ✅ Internshala live scraping |
+| 5 | Job Extraction Engine | ✅ Internshala, LinkedIn, Unstop, Adzuna, Remotive (live); Naukri/Wellfound via session cookies |
 | 6 | AI Matching Engine | ✅ Phase 1 |
 | 7 | Recommendation Engine | ✅ Phase 1 (ranking) |
 | 8 | Cover Letter Generator | ✅ Groq + heuristic fallback |
