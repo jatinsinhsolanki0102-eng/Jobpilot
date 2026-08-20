@@ -13,6 +13,7 @@
  - requirements.txt               : Root-level (references backend/)
  - runtime.txt                    : Python 3.12.0 version pin
  - .python-version                : Python 3.12 version pin
+ - Procfile                       : Start command for Nixpacks
  - deployment_issues.txt          : This file
 
  2. FILES MODIFIED
@@ -36,29 +37,43 @@
    Fix Attempt 1: Set Root Directory to ./backend -> Did not work
    Fix Attempt 2: Set Root Directory to backend -> Did not work
    Fix Attempt 3: Created nixpacks.toml in backend/ -> Did not work
-   Fix Attempt 4: Created root-level Dockerfile -> WORKED!
+   Fix Attempt 4: Created root-level Dockerfile -> Did not work (Belmo
+                  still used Nixpacks instead of Dockerfile)
+   WORKING FIX:  Created root-level Procfile + requirements.txt ->
+                  Nixpacks finally detected Python correctly!
 
    ROOT CAUSE: Belmo's Nixpacks ignores the Root Directory setting
    when detecting application type. It always scans the repo root.
+   The Procfile tells Nixpacks the start command. The root
+   requirements.txt tells Nixpacks it's a Python project.
 
- ISSUE 2: Dockerfile CMD parsing error
+ ISSUE 2: Empty start command
    Error: "/bin/bash: -c: option requires an argument"
-   Cause: CMD ["exec", "form"] not compatible with Belmo's shell
-   Fix: Changed to shell form CMD: uvicorn app.main:app ...
-   Status: App shows Running but health check returns 503
+   Cause: Nixpacks detected Python but had NO start command configured
+          (the "start" phase was empty in the Nixpacks plan)
+   Fix: Created Procfile at repo root with:
+        web: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+   Status: WORKING - app now starts successfully
 
- ISSUE 3: Environment variables not set
-   The backend crashes on startup without DATABASE_URL and SECRET_KEY
-   These MUST be added in Belmo Environment tab before deployment works
+ ISSUE 3: CORS_ORIGINS validation error
+   Error: "pydantic_core._pydantic_core.ValidationError: CORS_ORIGINS
+           Value error, Expecting value: line 1 column 2"
+   Cause: User pasted placeholder text with comments as CORS_ORIGINS value:
+          ["https://your-app.vercel.app"] (update after Vercel deploy)
+          The parentheses and comments broke JSON parsing.
+   Fix: Change CORS_ORIGINS to a valid value like:
+        http://localhost:3000
+        OR delete the CORS_ORIGINS variable entirely (has default)
+   Status: NOT YET FIXED - need to fix in Belmo Environment tab
 
  4. CURRENT DEPLOYMENT STATUS
  -----------------------------------------------------------------
 
  BACKEND (Belmo):
    URL: https://jobpilot-29d9.onbelmo.uk
-   Status: Running (but health check 503 - env vars may be missing)
-   Build: Dockerfile at repo root
-   Commit: 3cdca3e
+   Status: Running, build succeeds, app starts but crashes on CORS_ORIGINS
+   Build: Nixpacks (Python detected via Procfile)
+   Commit: 4ebd0f5
 
  FRONTEND (Vercel):
    Status: NOT YET DEPLOYED
@@ -68,48 +83,70 @@
    Project: jobpilot
    URL: https://aulgozbsutzitsebtwyp.supabase.co
    Status: Healthy
-   Connection string: Not yet added to Belmo
+   Connection string: Added to Belmo env vars
 
- 5. STILL PENDING
- -----------------------------------------------------------------
- [ ] Add DATABASE_URL (Supabase) to Belmo environment variables
- [ ] Add SECRET_KEY to Belmo environment variables
- [ ] Add GROQ_API_KEY to Belmo environment variables
- [ ] Add TELEGRAM_BOT_TOKEN to Belmo environment variables
- [ ] Redeploy backend and verify /health returns 200
- [ ] Deploy frontend to Vercel
- [ ] Set NEXT_PUBLIC_API_URL in Vercel to Belmo backend URL
- [ ] Update CORS_ORIGINS in Belmo with Vercel domain
- [ ] Test end-to-end (register, login, job search)
- [ ] Migrate data from Railway PostgreSQL to Supabase (if needed)
- [ ] Cancel Railway subscription before trial expires
-
- 6. ENVIRONMENT VARIABLES NEEDED
+ 5. NEXT STEPS (when resuming deployment)
  -----------------------------------------------------------------
 
- Belmo (Backend) - Environment tab:
-   DATABASE_URL     = postgresql://postgres.xxxx:password@aws-0-region.pooler.supabase.com:6543/postgres
-   SECRET_KEY       = any-random-string-here
-   GROQ_API_KEY     = your-groq-key
-   CORS_ORIGINS     = ["https://your-app.vercel.app"]
-   SCHEDULER_ENABLED = true
-   TELEGRAM_BOT_TOKEN = your-telegram-bot-token
+ STEP 1: Fix CORS_ORIGINS in Belmo (MOST IMPORTANT)
+   1. Go to Belmo -> Jobpilot service -> Environment tab
+   2. Find CORS_ORIGINS variable
+   3. Change value to: http://localhost:3000
+      OR delete the CORS_ORIGINS variable entirely
+   4. Click Redeploy
+   5. Verify: https://jobpilot-29d9.onbelmo.uk/health returns 200
+
+ STEP 2: Deploy Frontend to Vercel
+   1. Go to vercel.com -> Login with GitHub
+   2. Add New Project -> Select Jobpilot repo
+   3. Set Root Directory to: frontend
+   4. Add environment variable:
+      NEXT_PUBLIC_API_URL = https://jobpilot-29d9.onbelmo.uk
+   5. Deploy -> Copy Vercel URL
+
+ STEP 3: Update CORS_ORIGINS with Vercel URL
+   1. Go back to Belmo -> Environment tab
+   2. Change CORS_ORIGINS to: ["https://your-actual-vercel-url.vercel.app"]
+   3. Redeploy
+
+ STEP 4: Test End-to-End
+   1. Open Vercel frontend URL
+   2. Register/Login
+   3. Upload resume, browse jobs
+   4. Test Telegram bot: /start then /link <code>
+
+ 6. ENVIRONMENT VARIABLES (Belmo Environment tab)
+ -----------------------------------------------------------------
+ REQUIRED:
+   DATABASE_URL       = postgresql://postgres.xxxx:password@aws-0-region.pooler.supabase.com:6543/postgres?sslmode=require
+   SECRET_KEY         = any-random-string-here
+
+ OPTIONAL:
+   GROQ_API_KEY       = your-groq-key (from console.groq.com)
+   SCHEDULER_ENABLED  = true
+   TELEGRAM_BOT_TOKEN = your-telegram-bot-token (from @BotFather)
    TELEGRAM_BOT_USERNAME = JobPilotAIBot
+   CORS_ORIGINS       = http://localhost:3000 (update after Vercel deploy)
+   ADZUNA_APP_ID      = optional
+   ADZUNA_APP_KEY     = optional
 
- Vercel (Frontend) - Environment Variables:
+ Vercel (Frontend):
    NEXT_PUBLIC_API_URL = https://jobpilot-29d9.onbelmo.uk
 
  7. WHAT WORKED AND WHAT DID NOT
  -----------------------------------------------------------------
  WORKED:
-   - Root-level Dockerfile for Belmo deployment
+   - Root-level Procfile (tells Nixpacks the start command)
+   - Root-level requirements.txt (references backend/requirements.belmo.txt)
    - Supabase free tier database (healthy, no card needed)
    - Backend config.py changes for PostgreSQL URL normalization
+   - Nixpacks finally detects Python correctly
 
  DID NOT WORK:
    - Root Directory setting in Belmo (ignored by Nixpacks)
    - nixpacks.toml approach (Belmo didn't pick it up)
-   - requirements.belmo.txt (Belmo looks for requirements.txt at root)
+   - Root-level Dockerfile (Belmo uses Nixpacks, not Dockerfile)
+   - requirements.belmo.txt alone (Nixpacks needs root requirements.txt)
    - CMD exec form in Dockerfile (bash parsing error)
 
  8. RAILWAY MIGRATION NOTES
