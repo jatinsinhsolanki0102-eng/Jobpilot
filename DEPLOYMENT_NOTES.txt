@@ -1,107 +1,174 @@
-================================================================
+===============================================================
  JOBPILOT AI - DEPLOYMENT NOTES
- Status: RAILWAY SELECTED - ready to deploy (trial)
-================================================================
+ Status: VERCEL + BELMO + NEON (100% FREE) - ready to deploy
+===============================================================
 
- 1. PLATFORM DECISION
+ 1. PLATFORM DECISION (FREE TIER)
  -----------------------------------------------------------------
- Railway was chosen. Free trial: one-time $5 credit, 30 days,
- NO CREDIT CARD REQUIRED. After the trial, Railway reverts to the
- Free plan with $1/month of credit - not enough to keep this stack
- (2 services + Postgres) running 24/7, so the trial is a working
- deployment to validate the app. Long-term hosting can be decided
- after (paid Railway Hobby, Oracle Free VM, or an old machine).
+ ChatGPT suggestion - all free, no credit card needed:
+ - Vercel: Free tier for Next.js frontend
+ - Belmo: Free Starter tier for Python FastAPI backend (always-on)
+ - Neon: Free PostgreSQL database (500MB)
+ - Telegram bot: Works 24/7 (Belmo always-on service)
+ - Total Cost: $0/month
 
- 2. WHAT IS ALREADY PREPARED IN THIS REPO (committed)
+ 2. WHAT IS ALREADY PREPARED IN THIS REPO
  -----------------------------------------------------------------
-   - backend/railway.toml   : DOCKERFILE build + healthcheck /health
-   - frontend/railway.toml  : DOCKERFILE build + healthcheck /
-   - backend/Dockerfile     : Python 3.12 + Playwright Chromium
-                              (--with-deps), TZ=Asia/Kolkata, listens
-                              on $PORT, runs app.seed (idempotent)
-                              before uvicorn via start.sh.
-   - frontend/Dockerfile    : Node 22 + Next.js build via start.sh.
-   - backend/.dockerignore  : keeps .env, .venv, logs, db out of image.
-   - frontend/.dockerignore : keeps node_modules/.next out of image.
-   - backend/app/config.py  : CORS_ORIGINS accepts a JSON array, a
-                              plain URL, or a comma list.
-   - scheduler timezone     : Asia/Kolkata (daily summary 20:00 = 8 PM IST).
-   - requirements.txt       : tzdata included so zoneinfo works.
+   Backend (Belmo):
+   - backend/requirements.belmo.txt : Playwright-free dependencies
+   - backend/app/config.py          : PostgreSQL URL normalization
+   - backend/.env.example           : Updated with Neon connection format
+   - CORS_ORIGINS accepts JSON array, URL, or comma list
+   - Scheduler timezone: Asia/Kolkata (daily summary 20:00 = 8 PM IST)
 
- 3. DEPLOY STEPS (Railway dashboard, no CLI needed)
+   Frontend (Vercel):
+   - frontend/vercel.json           : Vercel deployment configuration
+   - frontend/.env.example          : Updated with Vercel instructions
+
+ 3. DEPLOY STEPS
  -----------------------------------------------------------------
-   1. Push repo to GitHub (done: github.com/jatinsinhsolanki0102-eng/Jobpilot).
-   2. Go to railway.com -> Login with GitHub (free trial, no card).
-   3. New Project -> Deploy from GitHub repo -> select Jobpilot.
-   4. Provision PostgreSQL: click + New -> Database -> PostgreSQL.
-      Railway auto-injects DATABASE_URL into the backend service.
-    5. Backend service (the container built from backend/Dockerfile):
-       - Settings -> General -> Root Directory = backend
-       - Variables tab, add:
-           GROQ_API_KEY          = <from backend/.env>
-           TELEGRAM_BOT_TOKEN    = <from backend/.env>
-           TELEGRAM_BOT_USERNAME = JobPilot_Update_AI_Bot
-           SECRET_KEY            = <long random string>
-           SCHEDULER_ENABLED     = true
-           CORS_ORIGINS          = ["https://<frontend-domain>"]
-           ADZUNA_APP_ID         = <from backend/.env>
-           ADZUNA_APP_KEY        = <from backend/.env>
-         (DATABASE_URL comes automatically from the Postgres plugin)
-       - NOTE: ADZUNA_APP_ID/APP_KEY enable the Adzuna source (a rich stream
-         of Indian jobs). They are NOT in the Docker image, so they must be
-         added here or Adzuna is silently skipped.
-       - OPTIONAL anti-bot cookies (only needed for Naukri/Wellfound, which
-         block datacenter IPs with Akamai/DataDome):
-           NAUKRI_COOKIES        = "name=value; name2=value2"
-           WELLFOUND_COOKIES     = "name=value; name2=value2"
-           SCRAPER_PROXY         = <residential proxy URL, optional>
-       - Deploy. Check logs for "Database ready",
-         "Background scheduler started", "Telegram bot polling started".
-         Open the public URL -> /health returns {"status":"ok",...}.
-   6. Frontend service (built from frontend/Dockerfile):
-      - Settings -> General -> Root Directory = frontend
-      - Variables tab, add: NEXT_PUBLIC_API_URL = https://<backend-domain>
-        (copy the backend public URL, e.g. https://<name>.up.railway.app)
-      - Redeploy once the variable is set (NEXT_PUBLIC_* is baked
-        at build time).
-   7. Verify end-to-end:
-      - Open frontend URL, register, upload resume, browse ranked jobs.
-      - Message the Telegram bot: /start then /link <code> from the app.
-      - Watch backend logs for a scheduled scan.
 
- Environment variables summary (never commit secrets):
-   Backend:  DATABASE_URL, GROQ_API_KEY, TELEGRAM_BOT_TOKEN,
-             TELEGRAM_BOT_USERNAME, SECRET_KEY, SCHEDULER_ENABLED, CORS_ORIGINS,
-             ADZUNA_APP_ID, ADZUNA_APP_KEY,
-             (optional) NAUKRI_COOKIES, WELLFOUND_COOKIES, LINKEDIN_COOKIES,
-             UNSTOP_COOKIES, SCRAPER_PROXY
-   Frontend: NEXT_PUBLIC_API_URL
+ ========== STEP 1: NEON DATABASE (do first) ==========
+ 1. Go to neon.tech -> Sign up with GitHub (free, no card)
+ 2. Create new project:
+    - Project name: jobpilot
+    - Region: AWS US East (or nearest to your users)
+ 3. When project is created, copy the connection string:
+    - Format: postgresql://username:password@ep-xxx.us-east-2.aws.neon.tech/dbname?sslmode=require
+    - IMPORTANT: Keep this safe, you'll need it for Belmo
 
- 4. DATABASE NOTES
+ ========== STEP 2: BELMO BACKEND ==========
+ 1. Go to belmo.io -> Login with GitHub
+ 2. Install Belmo GitHub App on your repository
+ 3. Click "New Service" -> Select your JobPilot-AI repo
+ 4. Set Root Directory to: backend
+ 5. Belmo auto-detects Python/FastAPI
+ 6. Add these environment variables in Belmo dashboard:
+    - DATABASE_URL = <paste Neon connection string from Step 1>
+    - SECRET_KEY = <generate: run openssl rand -hex 32>
+    - GROQ_API_KEY = <your Groq API key from console.groq.com>
+    - CORS_ORIGINS = ["https://your-app.vercel.app"]
+    - SCHEDULER_ENABLED = true
+    - TELEGRAM_BOT_TOKEN = <from @BotFather>
+    - TELEGRAM_BOT_USERNAME = JobPilotAIBot
+    - ADZUNA_APP_ID = <optional, free from developer.adzuna.com>
+    - ADZUNA_APP_KEY = <optional>
+    - REDIS_URL = redis://localhost:6379/0 (not needed, Belmo doesn't provide Redis free)
+    - NAUKRI_COOKIES = <optional, for scraping>
+    - WELLFOUND_COOKIES = <optional, for scraping>
+ 7. Deploy
+ 8. Check logs for: "Database ready", "Background services started"
+ 9. Copy your backend URL (e.g., https://your-app.belmo.app)
+
+ ========== STEP 3: VERCEL FRONTEND ==========
+ 1. Go to vercel.com -> Login with GitHub
+ 2. Click "Add New" -> "Project"
+ 3. Import your JobPilot-AI repository
+ 4. Set Root Directory to: frontend
+ 5. Framework: Next.js (auto-detected)
+ 6. Add environment variable:
+    - NEXT_PUBLIC_API_URL = https://your-app.belmo.app (from Step 2)
+ 7. Click Deploy
+ 8. Wait for build to complete
+ 9. Copy your frontend URL (e.g., https://your-app.vercel.app)
+
+ ========== STEP 4: FINAL UPDATE ==========
+ 1. Go back to Belmo dashboard -> Backend service -> Variables
+ 2. Update CORS_ORIGINS with your actual Vercel URL:
+    CORS_ORIGINS = ["https://your-actual-vercel-url.vercel.app"]
+ 3. Redeploy the backend service
+
+ 4. ENVIRONMENT VARIABLES SUMMARY
  -----------------------------------------------------------------
-   - Tables are created automatically on first start (app.seed uses
-     create_all + seeds 15 sample jobs) - no manual migration.
-   - Railway free-trial databases/volumes are deleted 30 days after
-     the trial credit expires - export before then if you keep going.
+ Backend (Belmo dashboard):
+   DATABASE_URL          = postgresql://...@ep-xxx.neon.tech/dbname?sslmode=require
+   SECRET_KEY            = <long random string from openssl rand -hex 32>
+   GROQ_API_KEY          = <your key from console.groq.com>
+   CORS_ORIGINS          = ["https://your-app.vercel.app"]
+   SCHEDULER_ENABLED     = true
+   TELEGRAM_BOT_TOKEN    = <from @BotFather>
+   TELEGRAM_BOT_USERNAME = JobPilotAIBot
+   ADZUNA_APP_ID         = <optional>
+   ADZUNA_APP_KEY        = <optional>
+   REDIS_URL             = redis://localhost:6379/0 (not used, optional)
+   NAUKRI_COOKIES        = <optional>
+   WELLFOUND_COOKIES     = <optional>
 
- 5. TRIAL COST / TIMELINE
+ Frontend (Vercel dashboard):
+   NEXT_PUBLIC_API_URL   = https://your-app.belmo.app
+
+ 5. HOW TELEGRAM BOT WORKS (24/7)
  -----------------------------------------------------------------
-   - $5 one-time credit, up to 30 days. This stack (2 web services +
-     Postgres, always-on) consumes roughly $3-6/month, so the trial
-     may last ~1-4 weeks depending on traffic/CPU.
-   - After credit runs out: revert to Free plan ($1/month credit,
-     services shut down if they exceed it) or upgrade to Hobby
-     ($5/month, requires a credit card).
+ - Belmo free tier: Always-on service (no spin-down)
+ - Scheduler runs in background: Checks jobs every 60 minutes
+ - Daily summary: Sent at 8 PM IST (20:00)
+ - Weekly report: Sent Sunday at 8 PM IST
+ - Bot responds to: /start, /link <code>, /status
+ - User links account via /link <code> from web app
 
- 6. OTHER PLATFORMS (for reference)
+ 6. COST BREAKDOWN (FREE)
  -----------------------------------------------------------------
-   - RENDER: blueprints in render.yaml; free tier SLEEPS after 15 min
-     idle -> bot stops. Paid Starter ~$7/mo keeps it always-on.
-   - ORACLE CLOUD: Always Free ARM VM (4 OCPU / 24 GB) runs 24/7
-     for $0; needs a credit card just for signup verification.
-   - OLD LAPTOP / RASPBERRY PI: run docker-compose.yml at home for
-     $0 with Cloudflare Tunnel for HTTPS; no card needed.
-   - NOT recommended: Vercel (serverless breaks scheduler + bot),
-     shared cPanel hosting.
+ - Vercel Free Tier:    $0  (Next.js frontend, serverless)
+ - Belmo Free Tier:     $0  (1 always-on service, free SSL)
+ - Neon Free Tier:      $0  (500MB PostgreSQL, 24/7 compute)
+ - Telegram Bot:        $0  (free via BotFather)
+ - Groq API:            $0  (free tier for LLM)
+ - TOTAL:               $0/month
 
-================================================================
+ 7. FREE TIER LIMITATIONS
+ -----------------------------------------------------------------
+ Neon (database):
+   - 500MB storage (enough for MVP)
+   - 24/7 compute on free tier
+   - Branching support
+
+ Belmo (backend):
+   - 1 always-on service
+   - Limited CPU/RAM
+   - No custom domains on free tier
+
+ Vercel (frontend):
+   - 100GB bandwidth/month
+   - Serverless functions (cold start possible)
+   - Automatic deployments from GitHub
+
+ 8. POST-DEPLOYMENT VERIFICATION
+ -----------------------------------------------------------------
+ 1. Open Vercel frontend URL -> Register/Login
+ 2. Upload resume -> Browse ranked jobs
+ 3. Check Belmo backend: https://your-app.belmo.app/health
+ 4. Test Telegram bot: /start then /link <code>
+ 5. Wait for scheduled scan (every 60 min)
+ 6. Verify daily summary at 8 PM IST
+
+ 9. TROUBLESHOOTING
+ -----------------------------------------------------------------
+ - CORS errors: Update CORS_ORIGINS in Belmo with Vercel domain
+ - Database error: Ensure Neon URL has ?sslmode=require
+ - Telegram bot not responding: Check TELEGRAM_BOT_TOKEN is correct
+ - Scheduler not running: Check SCHEDULER_ENABLED=true in Belmo
+ - Cold starts: Normal on free tier, first request may take 30s
+
+ 10. MIGRATION FROM RAILWAY
+ -----------------------------------------------------------------
+ 1. Export data from Railway PostgreSQL:
+    pg_dump <railway-database-url> > railway_backup.sql
+ 2. Import to Neon:
+    psql <neon-database-url> < railway_backup.sql
+ 3. Deploy to Belmo + Vercel (follow steps above)
+ 4. Cancel Railway subscription before trial ends
+
+===============================================================
+
+
+
+
+
+
+
+
+
+
+neon_connection_string = postgresql://neondb_owner:npg_An5WQ2ypkOfY@ep-plain-cell-axjbj6y2.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require
+
+supabase_connection_string = postgresql://postgres:[YOUR-PASSWORD]@db.aulgozbsutzitsebtwyp.supabase.co:5432/postgres

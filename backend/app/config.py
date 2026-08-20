@@ -20,6 +20,13 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str = "sqlite:///./jobpilot.db"
 
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def _normalize_database_url(cls, v):
+        if v and isinstance(v, str) and v.startswith("postgres://"):
+            return v.replace("postgres://", "postgresql://", 1)
+        return v
+
     GROQ_API_KEY: str | None = None
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
     GROQ_TIMEOUT_SECONDS: int = 60
@@ -28,6 +35,13 @@ class Settings(BaseSettings):
     MAX_UPLOAD_MB: int = 10
 
     REDIS_URL: str = "redis://localhost:6379/0"
+
+    @field_validator("REDIS_URL", mode="before")
+    @classmethod
+    def _normalize_redis_url(cls, v):
+        if v and isinstance(v, str) and v.startswith("rediss://"):
+            return v
+        return v
 
     # Telegram / notifications
     TELEGRAM_BOT_TOKEN: str | None = None
