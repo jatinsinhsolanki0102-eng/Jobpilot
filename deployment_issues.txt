@@ -1,0 +1,123 @@
+===============================================================
+ JOBPILOT AI - DEPLOYMENT CHANGES LOG
+ Date: August 20, 2026
+ Platform: Belmo (Backend) + Vercel (Frontend) + Supabase (Database)
+===============================================================
+
+ 1. FILES CREATED
+ -----------------------------------------------------------------
+ - backend/requirements.belmo.txt : Playwright-free dependencies
+ - backend/nixpacks.toml          : Nixpacks config for Python detection
+ - frontend/vercel.json           : Vercel deployment config
+ - Dockerfile                     : Root-level Dockerfile for Belmo
+ - requirements.txt               : Root-level (references backend/)
+ - runtime.txt                    : Python 3.12.0 version pin
+ - .python-version                : Python 3.12 version pin
+ - deployment_issues.txt          : This file
+
+ 2. FILES MODIFIED
+ -----------------------------------------------------------------
+ - backend/app/config.py          : Added DATABASE_URL validator
+                                      (converts postgres:// to postgresql://)
+                                    Added REDIS_URL validator
+                                      (handles rediss:// TLS URLs)
+ - backend/.env.example           : Updated PostgreSQL connection format
+                                      Added Neon/Supabase example URLs
+ - backend/requirements.txt       : Removed playwright, added redis>=5.0
+ - DEPLOYMENT_NOTES.txt           : Complete rewrite for Vercel+Belmo+Neon
+
+ 3. BELMO DEPLOYMENT ISSUES ENCOUNTERED
+ -----------------------------------------------------------------
+
+ ISSUE 1: Nixpacks can't detect Python
+   Error: "Nixpacks failed to detect the application type"
+   Cause: Root directory has both frontend (Node) and backend (Python).
+          Nixpacks detects Node from package.json at repo root.
+   Fix Attempt 1: Set Root Directory to ./backend -> Did not work
+   Fix Attempt 2: Set Root Directory to backend -> Did not work
+   Fix Attempt 3: Created nixpacks.toml in backend/ -> Did not work
+   Fix Attempt 4: Created root-level Dockerfile -> WORKED!
+
+   ROOT CAUSE: Belmo's Nixpacks ignores the Root Directory setting
+   when detecting application type. It always scans the repo root.
+
+ ISSUE 2: Dockerfile CMD parsing error
+   Error: "/bin/bash: -c: option requires an argument"
+   Cause: CMD ["exec", "form"] not compatible with Belmo's shell
+   Fix: Changed to shell form CMD: uvicorn app.main:app ...
+   Status: App shows Running but health check returns 503
+
+ ISSUE 3: Environment variables not set
+   The backend crashes on startup without DATABASE_URL and SECRET_KEY
+   These MUST be added in Belmo Environment tab before deployment works
+
+ 4. CURRENT DEPLOYMENT STATUS
+ -----------------------------------------------------------------
+
+ BACKEND (Belmo):
+   URL: https://jobpilot-29d9.onbelmo.uk
+   Status: Running (but health check 503 - env vars may be missing)
+   Build: Dockerfile at repo root
+   Commit: 3cdca3e
+
+ FRONTEND (Vercel):
+   Status: NOT YET DEPLOYED
+   Action needed: Import repo, set root to frontend, add env var
+
+ DATABASE (Supabase):
+   Project: jobpilot
+   URL: https://aulgozbsutzitsebtwyp.supabase.co
+   Status: Healthy
+   Connection string: Not yet added to Belmo
+
+ 5. STILL PENDING
+ -----------------------------------------------------------------
+ [ ] Add DATABASE_URL (Supabase) to Belmo environment variables
+ [ ] Add SECRET_KEY to Belmo environment variables
+ [ ] Add GROQ_API_KEY to Belmo environment variables
+ [ ] Add TELEGRAM_BOT_TOKEN to Belmo environment variables
+ [ ] Redeploy backend and verify /health returns 200
+ [ ] Deploy frontend to Vercel
+ [ ] Set NEXT_PUBLIC_API_URL in Vercel to Belmo backend URL
+ [ ] Update CORS_ORIGINS in Belmo with Vercel domain
+ [ ] Test end-to-end (register, login, job search)
+ [ ] Migrate data from Railway PostgreSQL to Supabase (if needed)
+ [ ] Cancel Railway subscription before trial expires
+
+ 6. ENVIRONMENT VARIABLES NEEDED
+ -----------------------------------------------------------------
+
+ Belmo (Backend) - Environment tab:
+   DATABASE_URL     = postgresql://postgres.xxxx:password@aws-0-region.pooler.supabase.com:6543/postgres
+   SECRET_KEY       = any-random-string-here
+   GROQ_API_KEY     = your-groq-key
+   CORS_ORIGINS     = ["https://your-app.vercel.app"]
+   SCHEDULER_ENABLED = true
+   TELEGRAM_BOT_TOKEN = your-telegram-bot-token
+   TELEGRAM_BOT_USERNAME = JobPilotAIBot
+
+ Vercel (Frontend) - Environment Variables:
+   NEXT_PUBLIC_API_URL = https://jobpilot-29d9.onbelmo.uk
+
+ 7. WHAT WORKED AND WHAT DID NOT
+ -----------------------------------------------------------------
+ WORKED:
+   - Root-level Dockerfile for Belmo deployment
+   - Supabase free tier database (healthy, no card needed)
+   - Backend config.py changes for PostgreSQL URL normalization
+
+ DID NOT WORK:
+   - Root Directory setting in Belmo (ignored by Nixpacks)
+   - nixpacks.toml approach (Belmo didn't pick it up)
+   - requirements.belmo.txt (Belmo looks for requirements.txt at root)
+   - CMD exec form in Dockerfile (bash parsing error)
+
+ 8. RAILWAY MIGRATION NOTES
+ -----------------------------------------------------------------
+ Current Railway status: 14 days / $1.86 credit left
+ To migrate data before expiry:
+   1. pg_dump <railway-database-url> > railway_backup.sql
+   2. psql <supabase-connection-string> < railway_backup.sql
+   3. Then cancel Railway
+
+===============================================================
