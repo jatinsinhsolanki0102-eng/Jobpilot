@@ -4,10 +4,8 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 
-from playwright.sync_api import TimeoutError as PWTimeoutError
-from playwright.sync_api import sync_playwright
-
 from .base import JobSource, RawJob
+from .common import PWTimeoutError, require_playwright, sync_playwright
 
 logger = logging.getLogger(__name__)
 
@@ -317,6 +315,7 @@ class InternshalaSource(JobSource):
         work_mode: str | None = None,
     ) -> list[RawJob]:
         jobs: list[RawJob] = []
+        require_playwright()
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             ctx = browser.new_context(

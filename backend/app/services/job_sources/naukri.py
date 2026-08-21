@@ -4,19 +4,19 @@ import hashlib
 import logging
 import re
 
-from playwright.sync_api import TimeoutError as PWTimeoutError
-from playwright.sync_api import sync_playwright
-
 from app.config import get_settings
 
 from .base import JobSource, RawJob
 from .common import (
+    PWTimeoutError,
     dedupe_strs,
     parse_cookie_str,
     parse_experience,
     parse_inr_salary,
     parse_relative_posted,
     parse_work_mode,
+    require_playwright,
+    sync_playwright,
 )
 
 logger = logging.getLogger(__name__)
@@ -162,6 +162,7 @@ class NaukriSource(JobSource):
         pages: int = 1,
     ) -> list[RawJob]:
         jobs: list[RawJob] = []
+        require_playwright()
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             ctx_opts: dict = {"user_agent": _USER_AGENT, "viewport": {"width": 1366, "height": 900}}

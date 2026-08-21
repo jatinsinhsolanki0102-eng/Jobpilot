@@ -5,12 +5,18 @@ import logging
 import re
 from typing import Any
 
-from playwright.sync_api import sync_playwright
-
 from app.config import get_settings
 
 from .base import JobSource, RawJob
-from .common import dedupe_strs, parse_compensation, parse_cookie_str, parse_iso_datetime, parse_work_mode
+from .common import (
+    dedupe_strs,
+    parse_compensation,
+    parse_cookie_str,
+    parse_iso_datetime,
+    parse_work_mode,
+    require_playwright,
+    sync_playwright,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +183,7 @@ class WellfoundSource(JobSource):
         logger.info("Wellfound search URL: %s", url)
 
         jobs: list[RawJob] = []
+        require_playwright()
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
             ctx_opts: dict = {"user_agent": _USER_AGENT, "viewport": {"width": 1366, "height": 900}}

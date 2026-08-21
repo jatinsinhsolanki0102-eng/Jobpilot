@@ -4,8 +4,6 @@ import json
 import logging
 from urllib.parse import quote
 
-from playwright.sync_api import sync_playwright
-
 from app.config import get_settings
 
 from .base import JobSource, RawJob
@@ -15,6 +13,8 @@ from .common import (
     parse_cookie_str,
     parse_iso_datetime,
     parse_work_mode,
+    require_playwright,
+    sync_playwright,
     walk_dicts,
 )
 
@@ -184,6 +184,7 @@ class UnstopSource(JobSource):
         """Query Unstop's public opportunity search API via the browser."""
         kinds = ["internships"] if internship else ["jobs"]
         jobs: list[RawJob] = []
+        require_playwright()
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             ctx_opts: dict = {"user_agent": _USER_AGENT, "viewport": {"width": 1366, "height": 900}}

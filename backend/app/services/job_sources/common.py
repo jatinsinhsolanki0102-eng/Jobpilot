@@ -5,7 +5,28 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator
 
+try:
+    from playwright.sync_api import TimeoutError as PWTimeoutError
+    from playwright.sync_api import sync_playwright
+
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    # Playwright is optional (slim deploys like Belmo skip it).
+    # Browser-based scrapers must call require_playwright() before use.
+    PWTimeoutError = Exception  # type: ignore[assignment,misc]
+    sync_playwright = None  # type: ignore[assignment]
+    PLAYWRIGHT_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
+
+
+def require_playwright() -> None:
+    """Raise a clear error if a browser-based scraper is used without playwright."""
+    if not PLAYWRIGHT_AVAILABLE:
+        raise RuntimeError(
+            "This job source requires 'playwright', which is not installed "
+            "on this deployment (browser-based scraping is disabled)."
+        )
 
 
 def parse_cookie_str(raw: str | None, domain: str) -> list[dict]:
