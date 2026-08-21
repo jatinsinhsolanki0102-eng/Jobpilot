@@ -66,6 +66,28 @@ export default function ResumePage() {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const pollRef = useRef<number | null>(null);
+
+  const stopPolling = () => {
+    if (pollRef.current !== null) {
+      window.clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  };
+
+  // While the newest resume is parsing, poll until it resolves.
+  const startPolling = () => {
+    stopPolling();
+    pollRef.current = window.setInterval(async () => {
+      try {
+        const list = await api.get<Resume[]>("/api/v1/resumes");
+        setResumes(list);
+        if (!list[0] || list[0].parse_status !== "parsing") stopPolling();
+      } catch {
+        /* transient errors: keep polling */
+      }
+    }, 2500);
+  };
 
   useEffect(() => {
     api
@@ -73,11 +95,13 @@ export default function ResumePage() {
       .then((data) => {
         setResumes(data);
         setLoading(false);
+        if (data[0]?.parse_status === "parsing") startPolling();
       })
       .catch((e) => {
         setError(e instanceof Error ? e.message : "Failed to load resumes");
         setLoading(false);
       });
+    return stopPolling;
   }, []);
 
   async function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -91,8 +115,9 @@ export default function ResumePage() {
       const res = await api.post<{ resume: Resume }>("/api/v1/resumes/upload", form);
       setResumes((prev) => [res.resume, ...prev]);
       if (fileRef.current) fileRef.current.value = "";
+      if (res.resume.parse_status === "parsing") startPolling();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Upload failed");
+      setError(err instanceof ApiError ? err.message : "Upload failed — please try again");
     } finally {
       setUploading(false);
     }

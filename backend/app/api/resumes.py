@@ -2,12 +2,20 @@ import shutil
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    UploadFile,
+    File,
+    status,
+)
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
-from ..database import get_db
+from ..database import SessionLocal, get_db
 from ..models import Resume, User
 from ..schemas import ResumeOut, UploadResponse
 from ..services.resume_parser import parse_resume
@@ -20,10 +28,37 @@ ALLOWED_EXTENSIONS = {".pdf": "pdf", ".txt": "txt"}
 ALLOWED_CONTENT_TYPES = {"application/pdf", "text/plain"}
 
 
+def _run_parse(resume_id: int, storage_path: str, file_type: str) -> None:
+    """Parse a resume in the background so uploads return immediately."""
+    db = SessionLocal()
+    try:
+        resume = db.get(Resume, resume_id)
+        if resume is None:
+            return
+        try:
+            parsed = parse_resume(Path(storage_path), file_type)
+            data = parsed.as_dict()
+            resume.raw_text = parsed.raw_text
+            resume.skills = data.get("skills", [])
+            resume.projects = data.get("projects", [])
+            resume.experience = data.get("experience", [])
+            resume.education = data.get("education", [])
+            resume.certifications = data.get("certifications", [])
+            resume.structured = data
+            resume.parse_status = "parsed"
+        except Exception as exc:  # noqa: BLE001
+            resume.parse_status = "failed"
+            resume.parse_error = str(exc)
+        db.commit()
+    finally:
+        db.close()
+
+
 @router.post(
     "/upload", response_model=UploadResponse, status_code=status.HTTP_201_CREATED
 )
 def upload_resume(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -73,22 +108,7 @@ def upload_resume(
     db.commit()
     db.refresh(resume)
 
-    try:
-        parsed = parse_resume(storage_path, file_type)
-        data = parsed.as_dict()
-        resume.raw_text = parsed.raw_text
-        resume.skills = data.get("skills", [])
-        resume.projects = data.get("projects", [])
-        resume.experience = data.get("experience", [])
-        resume.education = data.get("education", [])
-        resume.certifications = data.get("certifications", [])
-        resume.structured = data
-        resume.parse_status = "parsed"
-    except Exception as exc:  # noqa: BLE001
-        resume.parse_status = "failed"
-        resume.parse_error = str(exc)
-    db.commit()
-    db.refresh(resume)
+    background_tasks.add_task(_run_parse, resume.id, str(storage_path), file_type)
     return UploadResponse(resume=ResumeOut.model_validate(resume))
 
 
