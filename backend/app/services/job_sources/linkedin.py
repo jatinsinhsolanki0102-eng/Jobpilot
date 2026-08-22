@@ -8,7 +8,10 @@ from app.config import get_settings
 
 from .base import JobSource, RawJob
 from .common import (
+    PLAYWRIGHT_AVAILABLE,
     PWTimeoutError,
+    fetch_html,
+    make_soup,
     parse_cookie_str,
     parse_iso_datetime,
     parse_work_mode,
@@ -115,6 +118,74 @@ def _to_raw_job(item: dict) -> RawJob | None:
 class LinkedInSource(JobSource):
     name = "linkedin"
 
+    def _card_to_item(self, card) -> dict:
+        def txt(el):
+            return el.get_text(" ", strip=True) if el else ""
+
+        a = card.select_one("a.base-card__full-link") or card.select_one(
+            "a.base-search-card--link"
+        )
+        if a is None:
+            return {}
+        h3 = card.select_one("h3.base-search-card__title")
+        title = txt(h3) or txt(a)
+        if not title:
+            return {}
+        comp_el = card.select_one("h4.base-search-card__subtitle")
+        loc_el = card.select_one("span.job-search-card__location") or card.select_one(
+            ".base-search-card__metadata span"
+        )
+        time_el = card.select_one("time.job-search-card__listdate")
+        return {
+            "title": re.sub(r"\s+", " ", title),
+            "href": a.get("href") or "",
+            "company": (
+                txt(comp_el.select_one("a")) or txt(comp_el)
+                if comp_el
+                else ""
+            ),
+            "location": txt(loc_el),
+            "postedAt": (time_el.get("datetime") or "") if time_el else "",
+            "urn": a.get("data-entity-urn") or card.get("data-entity-urn") or "",
+        }
+
+    def _scrape_http(
+        self,
+        query: str | None,
+        location: str | None,
+        internship: bool,
+        limit: int,
+        pages: int,
+    ) -> list[RawJob]:
+        """Fetch LinkedIn's guest job search HTML without a browser."""
+        jobs: list[RawJob] = []
+        seen_ids: set[str] = set()
+        start = 0
+        max_starts = max(1, pages) * 25
+        cookies = get_settings().LINKEDIN_COOKIES
+        while len(jobs) < limit and start < max_starts:
+            html = fetch_html(
+                _build_url(query, location, start, internship), cookies=cookies
+            )
+            items: list[dict] = []
+            if html:
+                soup = make_soup(html)
+                items = [i for i in (self._card_to_item(c) for c in soup.select("div.base-search-card")) if i]
+            fresh_raws: list[RawJob] = []
+            for item in items:
+                jid = _job_id(item)
+                if jid in seen_ids:
+                    continue
+                seen_ids.add(jid)
+                raw = _to_raw_job(item)
+                if raw is not None:
+                    fresh_raws.append(raw)
+            jobs.extend(fresh_raws)
+            if len(items) < 25:
+                break
+            start += 25
+        return jobs[:limit]
+
     def scrape(
         self,
         query: str | None = None,
@@ -130,6 +201,8 @@ class LinkedInSource(JobSource):
         public guest HTML endpoint and a single listing page per call.
         Detail pages are intentionally not fetched to avoid IP blocks.
         """
+        if not PLAYWRIGHT_AVAILABLE:
+            return self._scrape_http(query, location, internship, limit, pages)
         jobs: list[RawJob] = []
         require_playwright()
         with sync_playwright() as p:

@@ -15,7 +15,6 @@ from ..services.job_sources import (
     source_available,
     sync_source,
 )
-from ..services.job_sources.common import PLAYWRIGHT_AVAILABLE
 from ..services.matching import ai_match_score, match_scores, rank_jobs
 from ..services.serializers import job_to_dict, pref_to_dict
 from .deps import get_current_user
@@ -30,12 +29,10 @@ def _source_availability(key: str) -> tuple[bool, str | None]:
         if not (s.ADZUNA_APP_ID and s.ADZUNA_APP_KEY):
             return False, "Needs ADZUNA_APP_ID / ADZUNA_APP_KEY on the server"
         return True, None
-    if key == "remotive":
-        return True, None
-    # Browser-based scrapers need playwright
-    if PLAYWRIGHT_AVAILABLE:
-        return True, None
-    return False, "Needs a headless browser (unavailable on this server)"
+    # All sources have plain-HTTP paths now (no browser required).
+    # Naukri may still be blocked by its anti-bot at runtime; the sync
+    # endpoint surfaces that as a readable error if it happens.
+    return True, None
 
 
 @router.get("", response_model=list[RankedJob])

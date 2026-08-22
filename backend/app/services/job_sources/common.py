@@ -19,6 +19,58 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+
+
+def fetch_html(
+    url: str,
+    *,
+    cookies: str | None = None,
+    proxy: str | None = None,
+    extra_headers: dict | None = None,
+    timeout: float = 30,
+) -> str | None:
+    """Fetch a page over plain HTTP (no browser). Returns HTML text or None.
+
+    This lets 'browser-based' scrapers run on hosts without playwright
+    whenever the target page is server-rendered.
+    """
+    import httpx
+
+    headers = {
+        "User-Agent": BROWSER_UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-IN,en;q=0.9",
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+    try:
+        with httpx.Client(
+            timeout=timeout,
+            follow_redirects=True,
+            proxy=proxy or None,
+            headers=headers,
+            cookies=cookies or None,
+        ) as client:
+            resp = client.get(url)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("HTTP fetch failed for %s: %s", url, exc)
+        return None
+    if resp.status_code != 200 or not resp.text:
+        logger.warning("HTTP %s for %s", resp.status_code, url)
+        return None
+    return resp.text
+
+
+def make_soup(html: str):
+    """Parse HTML with BeautifulSoup (stdlib parser, no extra binary deps)."""
+    from bs4 import BeautifulSoup
+
+    return BeautifulSoup(html, "html.parser")
+
 
 def require_playwright() -> None:
     """Raise a clear error if a browser-based scraper is used without playwright."""

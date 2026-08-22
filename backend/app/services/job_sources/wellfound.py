@@ -9,7 +9,10 @@ from app.config import get_settings
 
 from .base import JobSource, RawJob
 from .common import (
+    PLAYWRIGHT_AVAILABLE,
     dedupe_strs,
+    fetch_html,
+    make_soup,
     parse_compensation,
     parse_cookie_str,
     parse_iso_datetime,
@@ -162,8 +165,59 @@ def _to_raw_job(job: dict, company: str) -> RawJob | None:
     )
 
 
+def _collect_scripts_html(html: str) -> list[dict]:
+    """Same as _collect_scripts but from raw HTML (no browser)."""
+    out: list[dict] = []
+    try:
+        soup = make_soup(html)
+    except Exception:  # noqa: BLE001
+        return []
+    for s in soup.find_all("script"):
+        text = s.string or s.get_text() or ""
+        if not text.strip():
+            continue
+        stype = (s.get("type") or "").strip()
+        sid = s.get("id") or ""
+        if stype == "application/json" or sid == "__NEXT_DATA__":
+            out.append({"id": sid, "text": str(text)})
+        elif re.search(r"__APOLLO_STATE__|window\.__", str(text), re.IGNORECASE):
+            out.append({"id": sid, "text": str(text)})
+    return out
+
+
 class WellfoundSource(JobSource):
     name = "wellfound"
+
+    def _scrape_http(
+        self,
+        query: str | None,
+        location: str | None,
+        limit: int,
+    ) -> list[RawJob]:
+        slug = re.sub(r"[^a-z0-9]+", "-", (query or "").lower()).strip("-")
+        if location:
+            loc = re.sub(r"[^a-z0-9]+", "-", location.lower()).strip("-")
+            url = f"{BASE_URL}/role/l/{slug}/{loc}"
+        else:
+            url = f"{BASE_URL}/role/{slug}" if slug else f"{BASE_URL}/jobs"
+        html = fetch_html(url, cookies=get_settings().WELLFOUND_COOKIES)
+        if not html:
+            logger.warning("Wellfound HTTP fetch blocked or empty for %s", url)
+            return []
+        jobs: list[RawJob] = []
+        for script in _collect_scripts_html(html):
+            parsed = _parse_blob(script.get("text") or "")
+            if parsed is None:
+                continue
+            for job, company in _extract_jobs(parsed):
+                raw = _to_raw_job(job, company)
+                if raw is not None:
+                    jobs.append(raw)
+                    if len(jobs) >= limit:
+                        break
+            if len(jobs) >= limit:
+                break
+        return jobs[:limit]
 
     def scrape(
         self,
@@ -183,6 +237,8 @@ class WellfoundSource(JobSource):
         logger.info("Wellfound search URL: %s", url)
 
         jobs: list[RawJob] = []
+        if not PLAYWRIGHT_AVAILABLE:
+            return self._scrape_http(query, location, limit)
         require_playwright()
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])

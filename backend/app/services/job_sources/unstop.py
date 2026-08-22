@@ -8,7 +8,9 @@ from app.config import get_settings
 
 from .base import JobSource, RawJob
 from .common import (
+    PLAYWRIGHT_AVAILABLE,
     dedupe_strs,
+    fetch_html,
     parse_compensation,
     parse_cookie_str,
     parse_iso_datetime,
@@ -172,6 +174,54 @@ def _to_raw_job(obj: dict, kind: str) -> RawJob | None:
 class UnstopSource(JobSource):
     name = "unstop"
 
+    def _scrape_http(
+        self,
+        query: str | None,
+        location: str | None,
+        internship: bool,
+        limit: int,
+        pages: int,
+    ) -> list[RawJob]:
+        """Call Unstop's public JSON API directly - no browser needed."""
+        import httpx
+
+        kind = "internships" if internship else "jobs"
+        jobs: list[RawJob] = []
+        headers = {
+            "User-Agent": _USER_AGENT,
+            "Accept": "application/json, text/plain, */*",
+            "Referer": f"{BASE_URL}/opportunities",
+        }
+        proxy = _settings_proxy()
+        try:
+            with httpx.Client(timeout=30, follow_redirects=True, proxy=proxy or None, headers=headers) as client:
+                for page_no in range(1, max(1, pages) + 1):
+                    params = {
+                        "opportunity": kind,
+                        "page": page_no,
+                        "per_page": max(limit, 50),
+                    }
+                    if query:
+                        params["searchTerm"] = query
+                    if location:
+                        params["location"] = location
+                    resp = client.get(API_URL, params=params)
+                    if resp.status_code != 200:
+                        logger.warning("Unstop API HTTP %s", resp.status_code)
+                        break
+                    payload = resp.json()
+                    for obj in _find_opportunities(payload):
+                        raw = _to_raw_job(obj, kind)
+                        if raw is not None:
+                            jobs.append(raw)
+                            if len(jobs) >= limit:
+                                break
+                    if len(jobs) >= limit:
+                        break
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Unstop HTTP request failed: %s", exc)
+        return jobs[:limit]
+
     def scrape(
         self,
         query: str | None = None,
@@ -181,7 +231,9 @@ class UnstopSource(JobSource):
         with_details: bool = True,
         pages: int = 1,
     ) -> list[RawJob]:
-        """Query Unstop's public opportunity search API via the browser."""
+        """Query Unstop's public opportunity search API."""
+        if not PLAYWRIGHT_AVAILABLE:
+            return self._scrape_http(query, location, internship, limit, pages)
         kinds = ["internships"] if internship else ["jobs"]
         jobs: list[RawJob] = []
         require_playwright()

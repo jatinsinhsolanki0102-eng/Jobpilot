@@ -8,8 +8,11 @@ from app.config import get_settings
 
 from .base import JobSource, RawJob
 from .common import (
+    PLAYWRIGHT_AVAILABLE,
     PWTimeoutError,
     dedupe_strs,
+    fetch_html,
+    make_soup,
     parse_cookie_str,
     parse_experience,
     parse_inr_salary,
@@ -152,6 +155,81 @@ def _to_raw_job(item: dict) -> RawJob | None:
 class NaukriSource(JobSource):
     name = "naukri"
 
+    def _card_to_item(self, card) -> dict:
+        def txt(el):
+            return el.get_text(" ", strip=True) if el else ""
+
+        a = card.select_one("a.title") or card.select_one('a[href*="/job-listings"]')
+        if a is None:
+            return {}
+        title = re.sub(r"\s+", " ", txt(a))
+        if not title:
+            return {}
+        comp_el = card.select_one("a.subTitle") or card.select_one(".subTitle")
+        loc_texts = []
+        for sel in (
+            ".row1 .fleft",
+            "ul.fleft li",
+            '[class*="job-location"] span',
+            ".location",
+            ".jobTupleHeader .fleft",
+        ):
+            loc_texts.extend(txt(e) for e in card.select(sel) if txt(e))
+        return {
+            "title": title,
+            "href": a.get("href") or "",
+            "company": txt(comp_el),
+            "locations": loc_texts,
+            "salary": txt(card.select_one(".salary")) or txt(card.select_one('[class*="salary"]')),
+            "experience": txt(card.select_one(".exp")) or txt(card.select_one('[class*="experience"]')),
+            "posted": txt(card.select_one("span.postedd"))
+            or txt(card.select_one(".job-posted"))
+            or txt(card.select_one('[class*="posted"]')),
+            "description": txt(card.select_one(".job-description"))
+            or txt(card.select_one(".desc"))
+            or txt(card.select_one('[class*="job-description"]')),
+            "skills": [txt(e) for e in card.select(".tag") if txt(e)]
+            + [txt(e) for e in card.select('[class*="skill"]') if txt(e)],
+            "text": card.get_text(" ", strip=True),
+        }
+
+    def _scrape_http(
+        self,
+        query: str | None,
+        location: str | None,
+        limit: int,
+        pages: int,
+    ) -> list[RawJob]:
+        """Best-effort fetch of Naukri's server-rendered listing page."""
+        jobs: list[RawJob] = []
+        seen_ids: set[str] = set()
+        cookies = get_settings().NAUKRI_COOKIES
+        for page_no in range(1, max(1, pages) + 1):
+            url = _build_url(query, location, page_no)
+            html = fetch_html(url, cookies=cookies)
+            items: list[dict] = []
+            if html:
+                soup = make_soup(html)
+                cards = soup.select(
+                    '.jobTuple, article.jobTuple, [class*="job-listing-card"]'
+                )
+                if not cards and ("captcha" in html.lower() or "robot" in html.lower()):
+                    logger.warning("Naukri anti-bot page served for %s", url)
+                items = [i for i in (self._card_to_item(c) for c in cards) if i]
+            fresh: list[RawJob] = []
+            for item in items:
+                jid = _job_id(item)
+                if jid in seen_ids:
+                    continue
+                seen_ids.add(jid)
+                raw = _to_raw_job(item)
+                if raw is not None:
+                    fresh.append(raw)
+            jobs.extend(fresh)
+            if len(fresh) < 20 or page_no >= max(1, pages):
+                break
+        return jobs[:limit]
+
     def scrape(
         self,
         query: str | None = None,
@@ -162,6 +240,8 @@ class NaukriSource(JobSource):
         pages: int = 1,
     ) -> list[RawJob]:
         jobs: list[RawJob] = []
+        if not PLAYWRIGHT_AVAILABLE:
+            return self._scrape_http(query, location, limit, pages)
         require_playwright()
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
