@@ -15,7 +15,10 @@ def get_client():
     if _client is None:
         from groq import Groq
 
-        _client = Groq(api_key=settings.GROQ_API_KEY)
+        _client = Groq(
+            api_key=settings.GROQ_API_KEY,
+            timeout=settings.GROQ_TIMEOUT_SECONDS,
+        )
     return _client
 
 

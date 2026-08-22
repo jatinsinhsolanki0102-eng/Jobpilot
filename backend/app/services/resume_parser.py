@@ -1,7 +1,6 @@
 import logging
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from .ai import chat_json
@@ -200,18 +199,18 @@ class ParsedResume:
         }
 
 
-def extract_text_from_pdf(path: Path) -> str:
+def extract_text_from_pdf(data: bytes) -> str:
     import fitz
 
     text_parts: list[str] = []
-    with fitz.open(path) as doc:
+    with fitz.open(stream=data, filetype="pdf") as doc:
         for page in doc:
             text_parts.append(str(page.get_text("text")))
     return clean_text("\n".join(text_parts))
 
 
-def extract_text_from_txt(path: Path) -> str:
-    return clean_text(path.read_text(encoding="utf-8", errors="ignore"))
+def extract_text_from_txt(data: bytes) -> str:
+    return clean_text(data.decode("utf-8", errors="ignore"))
 
 
 def clean_text(text: str) -> str:
@@ -221,11 +220,11 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 
-def parse_resume(path: Path, file_type: str) -> ParsedResume:
+def parse_resume(data: bytes, file_type: str) -> ParsedResume:
     if file_type == "pdf":
-        raw = extract_text_from_pdf(path)
+        raw = extract_text_from_pdf(data)
     else:
-        raw = extract_text_from_txt(path)
+        raw = extract_text_from_txt(data)
 
     parsed = _parse_with_ai(raw)
     if parsed is None:
