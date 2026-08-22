@@ -20,6 +20,8 @@ const SOURCES = [
 
 const SOURCE_LABELS = Object.fromEntries(SOURCES.map((s) => [s.key, s.label]));
 
+type SourceInfo = { key: string; label: string; count?: number; available?: boolean; reason?: string | null };
+
 export default function JobsPage() {
   const [jobs, setJobs] = useState<RankedJob[]>([]);
   const [loading, setLoading] = useState(true);
@@ -28,6 +30,16 @@ export default function JobsPage() {
   const [query, setQuery] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState("");
+  const [srcInfo, setSrcInfo] = useState<Record<string, SourceInfo>>({});
+
+  useEffect(() => {
+    api
+      .get<SourceInfo[]>("/api/v1/jobs/sources")
+      .then((rows) => {
+        setSrcInfo(Object.fromEntries(rows.map((r) => [r.key, r])));
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     api
@@ -46,14 +58,30 @@ export default function JobsPage() {
   const reload = (filter: string) =>
     api.get<RankedJob[]>(`/api/v1/jobs?limit=50${filter ? `&source=${filter}` : ""}`);
 
+  const isAvailable = (key: string) =>
+    key === "" || srcInfo[key]?.available !== false;
+  const unavailReason = (key: string) =>
+    srcInfo[key]?.reason ?? "Unavailable on this server";
+
+  // Sync target: the active filter's source, else the best available platform.
+  const syncTarget =
+    source ||
+    ["remotive", "adzuna", "internshala"].find((k) => isAvailable(k)) ||
+    "remotive";
+  const canSync = !syncing && isAvailable(syncTarget);
+
   const handleSync = () => {
+    if (!isAvailable(syncTarget)) {
+      setSyncMsg(`⚠️ ${SOURCE_LABELS[syncTarget]} ${unavailReason(syncTarget)}`);
+      return;
+    }
     setSyncing(true);
     setSyncMsg("");
     api
       .post<{ added: number; updated: number; total_found: number; failed: number; source_label?: string }>(
         "/api/v1/jobs/sync",
         {
-          source: source || "internshala",
+          source: syncTarget,
           query: query.trim() || null,
           location: null,
           internship: true,
@@ -93,28 +121,33 @@ export default function JobsPage() {
             onKeyDown={(e) => e.key === "Enter" && handleSync()}
             className="sm:max-w-xs"
           />
-          <Button onClick={handleSync} disabled={syncing}>
+          <Button onClick={handleSync} disabled={!canSync}>
             {syncing && <Spinner className="h-4 w-4 border-zinc-300 border-t-transparent" />}
             {syncing
               ? "Syncing…"
-              : `Sync ${SOURCE_LABELS[source] ?? "Internshala"}`}
+              : `Sync ${SOURCE_LABELS[syncTarget] ?? "Remotive"}`}
           </Button>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
-          {SOURCES.map((s) => (
-            <button
-              key={s.label}
-              onClick={() => setSource(s.key)}
-              className={cn(
-                "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
-                source === s.key
-                  ? "border-indigo-500 bg-indigo-500/15 text-indigo-300"
-                  : "border-zinc-700 text-zinc-400 hover:bg-zinc-800"
-              )}
-            >
-              {s.label}
-            </button>
-          ))}
+          {SOURCES.map((s) => {
+            const unavailable = !isAvailable(s.key);
+            return (
+              <button
+                key={s.label}
+                onClick={() => setSource(s.key)}
+                title={unavailable ? unavailReason(s.key) : undefined}
+                className={cn(
+                  "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
+                  source === s.key
+                    ? "border-indigo-500 bg-indigo-500/15 text-indigo-300"
+                    : "border-zinc-700 text-zinc-400 hover:bg-zinc-800",
+                  unavailable && "opacity-40 line-through"
+                )}
+              >
+                {s.label}
+              </button>
+            );
+          })}
         </div>
       </Card>
 

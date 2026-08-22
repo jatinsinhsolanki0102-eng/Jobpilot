@@ -83,7 +83,7 @@ class RemotiveSource(JobSource):
                 resp = client.get(API_URL)
                 resp.raise_for_status()
                 jobs = resp.json().get("jobs", [])
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, ValueError) as exc:
             logger.warning("Remotive request failed: %s", exc)
             return []
 

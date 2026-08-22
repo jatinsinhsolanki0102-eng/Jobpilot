@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from ..config import get_settings
 from ..database import get_db
 from ..models import Application, Job, Preference, Resume, User
 from ..schemas import JobDetail, MatchBreakdown, RankedJob
@@ -14,11 +15,27 @@ from ..services.job_sources import (
     source_available,
     sync_source,
 )
+from ..services.job_sources.common import PLAYWRIGHT_AVAILABLE
 from ..services.matching import ai_match_score, match_scores, rank_jobs
 from ..services.serializers import job_to_dict, pref_to_dict
 from .deps import get_current_user
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+
+def _source_availability(key: str) -> tuple[bool, str | None]:
+    """Whether a source can actually run on this server, plus why not."""
+    if key == "adzuna":
+        s = get_settings()
+        if not (s.ADZUNA_APP_ID and s.ADZUNA_APP_KEY):
+            return False, "Needs ADZUNA_APP_ID / ADZUNA_APP_KEY on the server"
+        return True, None
+    if key == "remotive":
+        return True, None
+    # Browser-based scrapers need playwright
+    if PLAYWRIGHT_AVAILABLE:
+        return True, None
+    return False, "Needs a headless browser (unavailable on this server)"
 
 
 @router.get("", response_model=list[RankedJob])
@@ -91,6 +108,19 @@ def sync_jobs(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        label = SOURCE_LABELS.get(payload.source, payload.source)
+        raise HTTPException(
+            status_code=400,
+            detail=f"{label} can't run on this server ({exc}). "
+            "Try Remotive, or configure Adzuna API keys.",
+        ) from exc
+    except Exception as exc:  # noqa: BLE001 - never leak a CORS-less 500
+        label = SOURCE_LABELS.get(payload.source, payload.source)
+        raise HTTPException(
+            status_code=502,
+            detail=f"{label} sync failed: {exc.__class__.__name__}. Try again shortly.",
+        ) from exc
 
 
 @router.get("/sources")
@@ -100,13 +130,22 @@ def list_sources(
 ) -> list[dict]:
     rows = db.execute(select(Job.source, func.count(Job.id)).group_by(Job.source)).all()
     counts = {source: count for source, count in rows}
-    known = [{"key": k, "label": v} for k, v in sorted(SOURCE_LABELS.items())]
-    for entry in known:
-        entry["count"] = counts.get(entry["key"], 0)
+    known = []
+    for key, label in sorted(SOURCE_LABELS.items()):
+        available, reason = _source_availability(key)
+        known.append(
+            {
+                "key": key,
+                "label": label,
+                "count": counts.get(key, 0),
+                "available": available,
+                "reason": reason,
+            }
+        )
     if counts:
-        known.insert(0, {"key": "", "label": "All", "count": sum(counts.values())})
+        known.insert(0, {"key": "", "label": "All", "count": sum(counts.values()), "available": True, "reason": None})
     else:
-        known.insert(0, {"key": "", "label": "All", "count": 0})
+        known.insert(0, {"key": "", "label": "All", "count": 0, "available": True, "reason": None})
     return known
 
 
