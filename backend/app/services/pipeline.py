@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
@@ -174,6 +175,41 @@ def _log_sent(
     )
 
 
+def _already_sent_ids(db: Session, user_id: int, channel: str = "telegram") -> set[int]:
+    """Job ids already pushed to this user on this channel (never re-send)."""
+    return set(
+        db.scalars(
+            select(NotificationLog.job_id).where(
+                NotificationLog.user_id == user_id,
+                NotificationLog.channel == channel,
+            )
+        )
+    )
+
+
+def _already_sent_keys(db: Session, user_id: int, channel: str = "telegram") -> set[str]:
+    """Identity keys of every job already pushed to this user, so twins of a
+    sent posting (same listing under another platform/job_id) are skipped too."""
+    sent_ids = _already_sent_ids(db, user_id, channel)
+    if not sent_ids:
+        return set()
+    return {
+        _dedup_key({"url": j.url, "title": j.title, "company_name": j.company_name})
+        for j in db.scalars(select(Job).where(Job.id.in_(sent_ids)))
+    }
+
+
+def _dedup_key(job: dict) -> str:
+    """Identity used to drop the same posting seen twice in one scan
+    (e.g. listed on two different platforms)."""
+    url = (job.get("url") or "").split("?")[0].strip().lower()
+    if url:
+        return f"u:{url}"
+    title = re.sub(r"\W+", "", (job.get("title") or "").lower())
+    company = re.sub(r"\W+", "", (job.get("company_name") or "").lower())
+    return f"t:{title}|{company}"
+
+
 def _record_scan(db: Session, user_id: int, data: dict) -> None:
     today = date.today().isoformat()
     report = db.scalar(
@@ -327,12 +363,26 @@ def run_user_scan(user_id: int) -> dict:
         matched_count = sum(
             1 for j in ranked if j["match"]["score"] >= ns.min_match_score
         )
-        # Re-send the best matching jobs every scan so the user keeps getting
-        # updates (capped by max_per_scan). The per-user scan lock above plus
-        # APScheduler's max_instances prevent duplicate sends from overlapping
-        # scheduler + manual runs. Round-robin across sources so one platform
-        # (e.g. Internshala) can't fill every slot.
-        send_order = _round_robin(ranked)
+        # Send each job/internship only ONCE per user: skip anything already
+        # pushed on this channel (NotificationLog) and drop duplicate postings
+        # that appear under multiple sources within the same scan. Round-robin
+        # across sources so one platform (e.g. Internshala) can't fill every
+        # slot.
+        sent_ids = _already_sent_ids(db, user.id)
+        sent_keys = _already_sent_keys(db, user.id)
+        send_order: list[dict] = []
+        seen_keys: set[str] = set()
+        skipped_already_sent = 0
+        for j in _round_robin(ranked):
+            key = _dedup_key(j)
+            if j["id"] in sent_ids or key in sent_keys:
+                skipped_already_sent += 1
+                continue
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            send_order.append(j)
+
         sent = 0
         ignored = 0
         best_score = 0.0
@@ -390,13 +440,20 @@ def run_user_scan(user_id: int) -> dict:
             },
         )
         db.commit()
-        logger.info("Scan user %s: scanned=%d sent=%d", user_id, len(ranked), sent)
+        logger.info(
+            "Scan user %s: scanned=%d sent=%d already_sent=%d",
+            user_id,
+            len(ranked),
+            sent,
+            skipped_already_sent,
+        )
         return {
             "user_id": user_id,
             "scanned": len(ranked),
             "matched": matched_count,
             "sent": sent,
             "ignored": ignored,
+            "already_sent": skipped_already_sent,
             "avg_score": avg,
         }
     except Exception as exc:  # noqa: BLE001
